@@ -25,13 +25,28 @@ const FIELD_TYPES = {
 const TODAY = new Date().toISOString().slice(0, 10);
 const DEFAULT_MONTH = TODAY.slice(0, 7);
 const newField = () => ({ n: "", t: "txt", u: "", min: "", max: "" });
+const dateForMonth = (month) => month === DEFAULT_MONTH ? TODAY : `${month}-01`;
+const endOfMonth = (month) => {
+  const [year, monthNumber] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+};
 const API_BASE_URL = (
   import.meta.env.VITE_API_URL ||
   (import.meta.env.DEV ? "" : "https://backdiegolechona-1.onrender.com")
 ).replace(/\/+$/, "");
+const GET_CACHE_TTL_MS = 15_000;
+const getCache = new Map();
+const pendingGets = new Map();
+let apiCacheGeneration = 0;
 
 let pendingRequests = 0;
 let pendingWrites = 0;
+
+function clearApiCache() {
+  apiCacheGeneration += 1;
+  getCache.clear();
+  pendingGets.clear();
+}
 
 async function monitoredFetch(url, options) {
   const isWrite = (options?.method || "GET").toUpperCase() !== "GET";
@@ -52,6 +67,39 @@ async function monitoredFetch(url, options) {
 }
 
 async function api(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const cacheable = method === "GET" && !options.signal &&
+    ["/bootstrap", "/auth/me", "/modules", "/masters"].includes(path);
+  const cacheKey = path;
+  if (cacheable) {
+    const cached = getCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if (cached) getCache.delete(cacheKey);
+    const pending = pendingGets.get(cacheKey);
+    if (pending) return pending;
+  }
+  const request = performApiRequest(path, options, method);
+  if (!cacheable) {
+    if (method !== "GET") clearApiCache();
+    const result = await request;
+    if (method !== "GET") clearApiCache();
+    return result;
+  }
+  const generation = apiCacheGeneration;
+  pendingGets.set(cacheKey, request);
+  try {
+    const result = await request;
+    if (generation === apiCacheGeneration) {
+      if (getCache.size >= 25) getCache.delete(getCache.keys().next().value);
+      getCache.set(cacheKey, { value: result, expiresAt: Date.now() + GET_CACHE_TTL_MS });
+    }
+    return result;
+  } finally {
+    if (pendingGets.get(cacheKey) === request) pendingGets.delete(cacheKey);
+  }
+}
+
+async function performApiRequest(path, options, method) {
   const token = sessionStorage.getItem("lechona_access_token");
   const response = await monitoredFetch(`${API_BASE_URL}/api${path}`, {
     ...options,
@@ -65,6 +113,7 @@ async function api(path, options = {}) {
     const body = await response.json().catch(() => ({}));
     if (response.status === 401 && path !== "/auth/login") {
       sessionStorage.removeItem("lechona_access_token");
+      clearApiCache();
       window.dispatchEvent(new Event("lechona:auth-expired"));
     }
     throw new Error(body.error || `La API respondió ${response.status}.`);
@@ -84,7 +133,7 @@ function csvCell(value) {
   return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }
 
-function Table({ headers, children }) {
+function Table({ headers, children, serverPagination }) {
   const [page, setPage] = useState(0);
   const rows = Children.toArray(children);
   const pageSize = 10;
@@ -98,15 +147,19 @@ function Table({ headers, children }) {
       <div className="table-wrap">
         <table>
           <thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
-          <tbody>{rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize)}</tbody>
+          <tbody>{serverPagination ? rows : rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize)}</tbody>
         </table>
       </div>
-      {pageCount > 1 && <nav className="pagination" aria-label="Paginación de tabla">
-        <span>Mostrando {currentPage * pageSize + 1}–{Math.min((currentPage + 1) * pageSize, rows.length)} de {rows.length}</span>
+      {(serverPagination ? serverPagination.pages > 1 : pageCount > 1) && <nav className="pagination" aria-label="Paginación de tabla">
+        <span>Mostrando {serverPagination
+          ? `${(serverPagination.page - 1) * serverPagination.pageSize + 1}–${Math.min(serverPagination.page * serverPagination.pageSize, serverPagination.total)} de ${serverPagination.total}`
+          : `${currentPage * pageSize + 1}–${Math.min((currentPage + 1) * pageSize, rows.length)} de ${rows.length}`}</span>
         <div>
-          <button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Anterior</button>
-          <span>Página {currentPage + 1} de {pageCount}</span>
-          <button type="button" disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>Siguiente</button>
+          <button type="button" disabled={serverPagination ? serverPagination.page <= 1 : currentPage === 0}
+            onClick={() => serverPagination ? serverPagination.onPageChange(serverPagination.page - 1) : setPage(currentPage - 1)}>Anterior</button>
+          <span>Página {serverPagination ? serverPagination.page : currentPage + 1} de {serverPagination ? serverPagination.pages : pageCount}</span>
+          <button type="button" disabled={serverPagination ? serverPagination.page >= serverPagination.pages : currentPage >= pageCount - 1}
+            onClick={() => serverPagination ? serverPagination.onPageChange(serverPagination.page + 1) : setPage(currentPage + 1)}>Siguiente</button>
         </div>
       </nav>}
     </>
@@ -145,6 +198,21 @@ function Empty({ children = "Aún no hay elementos." }) {
   return <p className="empty">{children}</p>;
 }
 
+function ModuleLoading() {
+  return <section className="card loading-card" aria-label="Cargando programa">
+    <span className="loading-spinner" aria-hidden="true" />
+    <div><strong>Preparando programa…</strong><p>Estamos cargando sus registros y formatos.</p></div>
+  </section>;
+}
+
+function DashboardLoading() {
+  return <div className="dashboard-skeleton" role="status" aria-label="Cargando dashboard">
+    <div className="skeleton-stats">{Array.from({ length: 5 }, (_, index) => <div className="skeleton-block" key={index} />)}</div>
+    <div className="skeleton-panels"><div className="skeleton-block" /><div className="skeleton-block" /></div>
+    <div className="skeleton-block skeleton-alerts" />
+  </div>;
+}
+
 function RequestIndicator({ requestState }) {
   if (!requestState.pending) return null;
   return (
@@ -158,6 +226,7 @@ function RequestIndicator({ requestState }) {
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem("lechona_access_token") || "");
   const [data, setData] = useState(null);
+  const [programs, setPrograms] = useState({});
   const [currentUser, setCurrentUser] = useState(null);
   const [view, setView] = useState("dash");
   const [moduleId, setModuleId] = useState("agua");
@@ -168,6 +237,9 @@ export default function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
+  const [programLoading, setProgramLoading] = useState(false);
+  const [reportLoading, setReportLoading] = useState(true);
+  const [moduleRefresh, setModuleRefresh] = useState(0);
   const [requestState, setRequestState] = useState({ pending: 0, writes: 0 });
 
   useEffect(() => {
@@ -175,9 +247,11 @@ export default function App() {
     window.addEventListener("lechona:request-state", updateRequestState);
     return () => window.removeEventListener("lechona:request-state", updateRequestState);
   }, []);
+  const dataLoaded = Boolean(data);
   const refresh = useCallback(async () => {
     if (!sessionStorage.getItem("lechona_access_token")) {
       setData(null);
+      setPrograms({});
       setCurrentUser(null);
       setLoading(false);
       return;
@@ -197,50 +271,84 @@ export default function App() {
 
   useEffect(() => { refresh(); }, [refresh, token]);
   useEffect(() => {
+    if (!token || !data || ["dash", "mae", "bk", "users"].includes(view)) return;
+    let active = true;
+    const controller = new AbortController();
+    const programKey = `${moduleId}:${month}`;
+    setProgramLoading(!programs[programKey]);
+    api(`/modules/${encodeURIComponent(moduleId)}?month=${encodeURIComponent(month)}&records=0`, { signal: controller.signal })
+      .then((program) => {
+        if (active) setPrograms((current) => ({ ...current, [programKey]: program }));
+      })
+      .catch((reason) => {
+        if (active && reason.name !== "AbortError") setError(reason.message);
+      })
+      .finally(() => {
+        if (active) setProgramLoading(false);
+      });
+    return () => { active = false; controller.abort(); };
+  }, [token, data, moduleId, month, view, moduleRefresh]);
+  useEffect(() => {
     const expireSession = () => {
+      clearApiCache();
       sessionStorage.removeItem("lechona_access_token");
       setToken("");
       setData(null);
+      setPrograms({});
       setCurrentUser(null);
     };
     window.addEventListener("lechona:auth-expired", expireSession);
     return () => window.removeEventListener("lechona:auth-expired", expireSession);
   }, []);
   useEffect(() => {
-    if (!data) return;
-    api(`/reports?month=${encodeURIComponent(month)}${view !== "dash" && view !== "mae" && view !== "bk" && view !== "users" ? `&module=${encodeURIComponent(moduleId)}` : ""}`)
-      .then(setReport)
-      .catch((reason) => setError(reason.message));
-  }, [data, month, moduleId, view]);
+    if (!dataLoaded) return;
+    let active = true;
+    const controller = new AbortController();
+    setReportLoading(true);
+    api(`/reports?month=${encodeURIComponent(month)}${view !== "dash" && view !== "mae" && view !== "bk" && view !== "users" ? `&module=${encodeURIComponent(moduleId)}` : ""}`, { signal: controller.signal })
+      .then((result) => { if (active) setReport(result); })
+      .catch((reason) => { if (active && reason.name !== "AbortError") setError(reason.message); })
+      .finally(() => { if (active) setReportLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [dataLoaded, month, moduleId, view, moduleRefresh]);
 
-  const notify = useCallback(async (operation, successMessage) => {
+  const notify = useCallback(async (operation, successMessage, refreshScope = "module") => {
     setError("");
     setNotice("");
     try {
       await operation();
       if (successMessage) setNotice(successMessage);
-      await refresh();
+      if (refreshScope === "bootstrap") {
+        const bootstrap = await api("/bootstrap");
+        setData(bootstrap);
+      } else {
+        setModuleRefresh((value) => value + 1);
+      }
       return true;
     } catch (reason) {
       setError(reason.message);
       return false;
     }
-  }, [refresh]);
+  }, []);
 
   const openModule = (id) => {
+    setProgramLoading(!programs[`${id}:${month}`]);
     setModuleId(id);
     setView(id);
     setTab("res");
   };
 
   const handleLogin = (accessToken) => {
+    clearApiCache();
     sessionStorage.setItem("lechona_access_token", accessToken);
     setToken(accessToken);
   };
   const logout = () => {
+    clearApiCache();
     sessionStorage.removeItem("lechona_access_token");
     setToken("");
     setData(null);
+    setPrograms({});
     setCurrentUser(null);
     setView("dash");
     setError("");
@@ -260,7 +368,7 @@ export default function App() {
   }
 
   const module = data.modules.find((item) => item.id === moduleId);
-  const program = data.programs[moduleId];
+  const program = programs[`${moduleId}:${month}`];
   const isSpecialView = ["dash", "mae", "bk", "users"].includes(view);
   const canManageUsers = currentUser && ["super", "user_admin"].includes(currentUser.role);
   const currentMonthReport = report;
@@ -309,10 +417,16 @@ export default function App() {
 
         {error && <div className="message error" role="alert">{error}<button onClick={() => setError("")}>Cerrar</button></div>}
         {notice && <div className="message success" role="status">{notice}<button onClick={() => setNotice("")}>Cerrar</button></div>}
-        {view === "dash" && <Dashboard data={data} report={currentMonthReport} month={month} onPrint={() => window.print()} />}
+        {view === "dash" && <Dashboard data={data} report={currentMonthReport} month={month} loading={reportLoading} onPrint={() => window.print()} />}
         {view === "mae" && <Masters data={data} notify={notify} setError={setError} />}
         {view === "bk" && <Backup lastBackup={data.lastBackup} month={month} notify={notify} />}
         {view === "users" && canManageUsers && <UserManagement currentUser={currentUser} />}
+        {!isSpecialView && !program && (programLoading
+          ? <ModuleLoading />
+          : <section className="card module-load-error">
+            <p>No se pudo cargar este programa.</p>
+            <button onClick={() => setModuleRefresh((value) => value + 1)}>Intentar de nuevo</button>
+          </section>)}
         {!isSpecialView && program && (
           <>
             <nav className="tabs no-print">
@@ -328,7 +442,7 @@ export default function App() {
             {tab === "res" && <ProgramSummary program={program} report={currentMonthReport} moduleId={moduleId} />}
             {tab === "doc" && <Documents moduleId={moduleId} documents={program.documents} notify={notify} />}
             {tab === "fmt" && <Formats moduleId={moduleId} formats={program.formats} notify={notify} onSelectFormat={(id) => { setPreferredFormatId(id); setTab("reg"); }} />}
-            {tab === "reg" && <Records moduleId={moduleId} program={program} masters={data.masters} month={month} notify={notify} preferredFormatId={preferredFormatId} />}
+            {tab === "reg" && <Records moduleId={moduleId} program={program} masters={data.masters} month={month} notify={notify} preferredFormatId={preferredFormatId} refreshKey={moduleRefresh} />}
             {tab === "cro" && <Schedules moduleId={moduleId} schedules={program.schedules} notify={notify} />}
             {tab === "acc" && <Actions moduleId={moduleId} actions={program.actions} notify={notify} />}
             {tab === "ale" && <Alerts alerts={currentMonthReport?.alerts || []} />}
@@ -408,27 +522,32 @@ function AlertList({ alerts = [] }) {
   ))}</div>;
 }
 
-function Dashboard({ data, report, month, onPrint }) {
-  const numericFields = data.modules.flatMap((item) => data.programs[item.id].formats.flatMap((format) =>
-    format.fields.filter((field) => field.t === "num").map((field) => ({
-      id: `${item.id}|${format.id}|${field.n}`,
-      moduleId: item.id,
+function Dashboard({ data, report, month, loading, onPrint }) {
+  const formats = data.formats || Object.values(data.programs || {}).flatMap((program) => program.formats);
+  const numericFields = formats.flatMap((format) => {
+    const module = data.modules.find((item) => item.id === format.moduleId);
+    if (!module) return [];
+    return format.fields.filter((field) => field.t === "num").map((field) => ({
+      id: `${module.id}|${format.id}|${field.n}`,
+      moduleId: module.id,
       formatId: format.id,
       field,
-      label: `${item.name} › ${format.name} › ${field.n}`,
-    })),
-  ));
+      label: `${module.name} › ${format.name} › ${field.n}`,
+    }));
+  });
   const [seriesId, setSeriesId] = useState("");
+  if (loading) return <DashboardLoading />;
+  if (!report) return <section className="card"><Empty>No se pudieron cargar los indicadores.</Empty></section>;
   const selectedSeries = numericFields.find((item) => item.id === seriesId) || numericFields[0];
   const bars = data.modules.map((module) => {
-    const rows = data.programs[module.id].records.filter((record) => record.date.startsWith(month));
-    return { ...module, total: rows.length, deviations: rows.filter((record) => record.devs.length).length };
+    const rows = report?.records.filter((record) => record.moduleId === module.id) || [];
+    return { ...module, total: rows.length, deviations: rows.filter((record) => record.deviations.length).length };
   });
   const seriesRecords = selectedSeries
-    ? data.programs[selectedSeries.moduleId].records
-      .filter((record) => record.fmt === selectedSeries.formatId && record.date.startsWith(month) && record.vals[selectedSeries.field.n] !== "")
+    ? (report?.records || [])
+      .filter((record) => record.moduleId === selectedSeries.moduleId && record.formatId === selectedSeries.formatId && record.values[selectedSeries.field.n] !== "")
       .sort((a, b) => a.date.localeCompare(b.date))
-      .map((record) => ({ date: record.date, value: Number(record.vals[selectedSeries.field.n]) }))
+      .map((record) => ({ date: record.date, value: Number(record.values[selectedSeries.field.n]) }))
       .filter((record) => Number.isFinite(record.value))
     : [];
   return (
@@ -520,6 +639,7 @@ function Masters({ data, notify, setError }) {
     const saved = await notify(
       () => api(`/masters/${category}`, { method: "POST", body: JSON.stringify({ value: normalizedValue }) }),
       `Se agregó el elemento a ${name.toLocaleLowerCase("es")}.`,
+      "bootstrap",
     );
     if (saved) setValue("");
   };
@@ -529,6 +649,7 @@ function Masters({ data, notify, setError }) {
     notify(
       () => api(`/masters/${category}/${item.id}`, { method: "DELETE" }),
       `Se eliminó “${item.value}” de ${name.toLocaleLowerCase("es")}.`,
+      "bootstrap",
     );
   };
 
@@ -622,6 +743,18 @@ function Masters({ data, notify, setError }) {
 
 function Documents({ moduleId, documents, notify }) {
   const [form, setForm] = useState({ name: "", tipo: "Programa", ver: "1", rev: "" });
+  const download = async (item) => {
+    try {
+      const documentData = await api(`/modules/${moduleId}/documents/${item.id}`);
+      if (!documentData.data) throw new Error("Este documento no tiene un archivo adjunto.");
+      const link = document.createElement("a");
+      link.href = documentData.data;
+      link.download = documentData.file || item.name;
+      link.click();
+    } catch (reason) {
+      window.alert(reason.message);
+    }
+  };
   const add = async (event) => {
     event.preventDefault();
     const file = event.currentTarget.file.files[0];
@@ -654,7 +787,7 @@ function Documents({ moduleId, documents, notify }) {
       </section>
       <section className="card"><h2>Documentos registrados</h2>
         {documents.length ? <Table headers={["Documento", "Tipo", "Versión", "Revisión", "Archivo", ""]}>
-          {documents.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.tipo}</td><td>{item.ver}</td><td>{item.rev || "—"}</td><td>{item.data ? <a download={item.file} href={item.data}>Descargar {item.file}</a> : "—"}</td><td><button className="danger-button" onClick={() => notify(() => api(`/modules/${moduleId}/documents/${item.id}`, { method: "DELETE" }), "Documento eliminado.")}>Eliminar</button></td></tr>)}
+          {documents.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.tipo}</td><td>{item.ver}</td><td>{item.rev || "—"}</td><td>{item.file ? <button className="link-button" onClick={() => download(item)}>Descargar {item.file}</button> : "—"}</td><td><button className="danger-button" onClick={() => notify(() => api(`/modules/${moduleId}/documents/${item.id}`, { method: "DELETE" }), "Documento eliminado.")}>Eliminar</button></td></tr>)}
         </Table> : <Empty />}</section>
     </>
   );
@@ -720,25 +853,70 @@ function Formats({ moduleId, formats, notify, onSelectFormat }) {
   );
 }
 
-function Records({ moduleId, program, masters, month, notify, preferredFormatId }) {
+function Records({ moduleId, program, masters, month, notify, preferredFormatId, refreshKey }) {
   const [formatId, setFormatId] = useState(program.formats[0]?.id || "");
   const [values, setValues] = useState({});
-  const [meta, setMeta] = useState({ date: TODAY, resp: "", obs: "" });
+  const [meta, setMeta] = useState({ date: dateForMonth(month), resp: "", obs: "" });
+  const [history, setHistory] = useState({ items: [], total: 0, page: 1, pageSize: 10, pages: 0 });
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   useEffect(() => {
     if (preferredFormatId && program.formats.some((format) => format.id === preferredFormatId)) {
       setFormatId(preferredFormatId);
+    } else if (!program.formats.some((format) => format.id === formatId)) {
+      setFormatId(program.formats[0]?.id || "");
     }
-  }, [preferredFormatId, program.formats]);
+  }, [preferredFormatId, program.formats, formatId]);
+  useEffect(() => {
+    setMeta((current) => current.date.startsWith(`${month}-`)
+      ? current
+      : { ...current, date: dateForMonth(month) });
+    setHistoryPage(1);
+  }, [moduleId, month]);
+  useEffect(() => {
+    if (!formatId) {
+      setHistory({ items: [], total: 0, page: 1, pageSize: 10, pages: 0 });
+      setHistoryLoading(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    setHistoryLoading(true);
+    setHistoryError("");
+    setHistory({ items: [], total: 0, page: historyPage, pageSize: 10, pages: 0 });
+    const query = new URLSearchParams({
+      month,
+      format: formatId,
+      page: String(historyPage),
+      limit: "10",
+    });
+    api(`/modules/${encodeURIComponent(moduleId)}/records?${query}`, { signal: controller.signal })
+      .then((result) => {
+        setHistory(result);
+        if (result.pages > 0 && historyPage > result.pages) setHistoryPage(result.pages);
+      })
+      .catch((reason) => {
+        if (reason.name !== "AbortError") setHistoryError(reason.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setHistoryLoading(false);
+      });
+    return () => controller.abort();
+  }, [moduleId, month, formatId, historyPage, refreshKey]);
   const format = program.formats.find((item) => item.id === formatId);
-  const rows = program.records.filter((record) => record.fmt === formatId && record.date.startsWith(month));
+  const rows = format ? history.items : [];
   const save = async (event) => {
     event.preventDefault();
     if (!format) return;
+    if (!meta.date.startsWith(`${month}-`)) {
+      setHistoryError("La fecha debe pertenecer al mes de trabajo seleccionado.");
+      return;
+    }
     const saved = await notify(() => api(`/modules/${moduleId}/records`, {
       method: "POST",
-      body: JSON.stringify({ fmt: format.id, ...meta, vals: values }),
+      body: JSON.stringify({ fmt: format.id, ...meta, month, vals: values }),
     }), "Registro guardado.");
-    if (saved) { setValues({}); setMeta({ date: TODAY, resp: "", obs: "" }); }
+    if (saved) { setValues({}); setMeta({ date: dateForMonth(month), resp: "", obs: "" }); }
   };
   if (!program.formats.length) return <section className="card"><Empty>Crea primero un formato en la pestaña Formatos.</Empty></section>;
   return (
@@ -747,15 +925,24 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId 
         <h2>Nuevo registro</h2>
         <label className="compact-label">Formato<select id="record-format" value={formatId} onChange={(e) => setFormatId(e.target.value)}>{program.formats.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         {format && <form className="form-grid record-form" onSubmit={save}>
-          <label>Fecha<input type="date" required value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} /></label>
+          <label>Fecha<input type="date" required min={`${month}-01`} max={endOfMonth(month)} value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} /></label>
           <label>Responsable<input value={meta.resp} onChange={(e) => setMeta({ ...meta, resp: e.target.value })} /></label>
           {format.fields.map((field) => <FieldInput key={field.n} field={field} masters={masters} value={values[field.n] ?? ""} onChange={(value) => setValues({ ...values, [field.n]: value })} />)}
           <label className="wide-field">Observaciones<input value={meta.obs} onChange={(e) => setMeta({ ...meta, obs: e.target.value })} /></label>
           <button className="primary">Guardar registro</button>
         </form>}
       </section>
-      <section className="card"><h2>Histórico {month} · {rows.length}</h2>
-        {rows.length ? <Table headers={["Fecha", "Responsable", ...format.fields.map((field) => field.n), "Observaciones", "Estado", ""]}>
+      <section className="card"><h2>Histórico {month} · {history.total}</h2>
+        {historyError && <p className="message error" role="alert">{historyError}</p>}
+        {historyLoading ? <p role="status">Cargando registros…</p> : rows.length ? <Table
+          headers={["Fecha", "Responsable", ...format.fields.map((field) => field.n), "Observaciones", "Estado", ""]}
+          serverPagination={{
+            page: history.page,
+            pageSize: history.pageSize,
+            pages: history.pages,
+            total: history.total,
+            onPageChange: setHistoryPage,
+          }}>
           {rows.map((record) => <tr key={record.id} className={record.devs.length ? "bad-row" : ""}>
             <td>{record.date}</td><td>{record.resp || "—"}</td>{format.fields.map((field) => <td key={field.n} className={record.devs.some((item) => item.startsWith(`${field.n}:`)) ? "bad-value" : ""}>{record.vals[field.n] ?? ""}</td>)}
             <td>{record.obs}</td><td><StatusTag bad={record.devs.length > 0}>{record.devs.length ? "Desviación" : "OK"}</StatusTag></td>
@@ -1024,7 +1211,7 @@ function Backup({ lastBackup, month, notify }) {
     try {
       const backup = await api(`/backup${selectedMonth ? `?month=${encodeURIComponent(selectedMonth)}` : ""}`);
       saveFile(`backup_diego_lechona_${selectedMonth || "completo"}_${TODAY}.json`, JSON.stringify(backup, null, 2), "application/json");
-      await notify(() => Promise.resolve(), "Backup descargado.");
+      await notify(() => Promise.resolve(), "Backup descargado.", "bootstrap");
     } catch (reason) {
       setBackupError(reason.message);
     }
