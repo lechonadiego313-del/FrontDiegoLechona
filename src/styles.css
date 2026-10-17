@@ -94,6 +94,24 @@ p { line-height: 1.55; }
 .trend-point { fill: white; stroke: var(--pink); stroke-width: 3; }
 .trend-labels { display: flex; justify-content: space-between; color: #73738a; font-size: 10px; }
 .trend-labels b { color: var(--navy); }
+.record-trends-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 18px; }
+.record-trend-chart { min-width: 0; margin-top: 12px; }
+.record-trend-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; color: var(--navy); font-size: 12px; }
+.record-trend-heading span { color: #74748b; font-size: 11px; }
+.record-trend-chart svg { display: block; width: 100%; height: 220px; overflow: visible; margin-top: 8px; }
+.record-chart-grid { stroke: #e8e8f0; stroke-width: 1; }
+.record-chart-value { fill: #74748b; font-size: 11px; }
+.record-chart-limit { stroke: var(--red); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.record-chart-line { fill: none; stroke: var(--blue, #3182ce); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.record-chart-point { fill: white; stroke: var(--blue, #3182ce); stroke-width: 3; }
+.record-trend-chart.chlorine .record-chart-line,
+.record-trend-chart.chlorine .record-chart-point { stroke: #168a68; }
+.record-trend-chart.ph .record-chart-line,
+.record-trend-chart.ph .record-chart-point { stroke: #7654cf; }
+.record-chart-dates { position: relative; height: 26px; margin-left: 6.4%; margin-right: 2.5%; color: #74748b; font-size: 10px; }
+.record-chart-dates span { position: absolute; max-width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transform: translateX(-50%); }
+.record-chart-dates span:first-child { transform: none; }
+.record-chart-dates span:last-child { transform: translateX(-100%); }
 .program-bars { display: grid; gap: 8px; }
 .bar-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr 38px minmax(110px, 145px); gap: 10px; align-items: center; font-size: 11px; }
 .bar-track { height: 9px; border-radius: 9px; overflow: hidden; background: #eeeefa; }

@@ -194,6 +194,83 @@ function TrendChart({ rows, field }) {
   </div>;
 }
 
+function RecordTrendChart({ field, records, variant = "temperature" }) {
+  const samples = records.flatMap((record) => {
+    const rawValue = record.vals?.[field.n];
+    const value = rawValue === "" || rawValue == null ? NaN : Number(rawValue);
+    if (!Number.isFinite(value)) return [];
+    const time = record.createdAt
+      ? new Date(record.createdAt).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })
+      : "";
+    return [{ id: record.id, date: record.date, time, value }];
+  });
+
+  if (samples.length < 2) {
+    return <p className="empty">{samples.length
+      ? `Se necesita otra medición de ${field.n} para mostrar su evolución.`
+      : `No hay mediciones numéricas de ${field.n} para este mes.`}</p>;
+  }
+
+  const width = 720;
+  const height = 250;
+  const left = 46;
+  const right = 18;
+  const top = 16;
+  const bottom = 32;
+  const values = samples.map((sample) => sample.value);
+  const minLimit = field.min === "" || field.min == null ? null : Number(field.min);
+  const maxLimit = field.max === "" || field.max == null ? null : Number(field.max);
+  const lowValue = Math.min(...values, ...(Number.isFinite(minLimit) ? [minLimit] : []));
+  const highValue = Math.max(...values, ...(Number.isFinite(maxLimit) ? [maxLimit] : []));
+  const padding = (highValue - lowValue || 1) * 0.12;
+  const low = lowValue - padding;
+  const high = highValue + padding;
+  const x = (index) => left + (samples.length === 1 ? 0 : index * (width - left - right) / (samples.length - 1));
+  const y = (value) => height - bottom - (value - low) * (height - top - bottom) / (high - low);
+  const path = samples.map((sample, index) => `${index ? "L" : "M"} ${x(index)} ${y(sample.value)}`).join(" ");
+  const labels = Array.from({ length: Math.min(samples.length, 5) }, (_, index, all) => {
+    const sampleIndex = all.length === 1
+      ? 0
+      : Math.round(index * (samples.length - 1) / (all.length - 1));
+    const sample = samples[sampleIndex];
+    return { sample, position: x(sampleIndex) / width * 100, key: `${sample.id}-${sampleIndex}` };
+  });
+  const limitLines = [
+    Number.isFinite(minLimit) ? { value: minLimit, label: "Mínimo" } : null,
+    Number.isFinite(maxLimit) ? { value: maxLimit, label: "Máximo" } : null,
+  ].filter(Boolean);
+
+  return <div className={`record-trend-chart ${variant}`}>
+    <div className="record-trend-heading">
+      <strong>{field.n}{field.u ? ` (${field.u})` : ""}</strong>
+      <span>{samples.length} mediciones</span>
+    </div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Evolución de ${field.n}`} preserveAspectRatio="none">
+      {[0, 1, 2, 3].map((step) => {
+        const value = highValue - step * (highValue - lowValue) / 3;
+        const lineY = top + step * (height - top - bottom) / 3;
+        return <g key={step}>
+          <line x1={left} y1={lineY} x2={width - right} y2={lineY} className="record-chart-grid" />
+          <text x={left - 7} y={lineY + 4} textAnchor="end" className="record-chart-value">{Number(value.toFixed(2))}</text>
+        </g>;
+      })}
+      {limitLines.map((line) => <line key={line.label} x1={left} y1={y(line.value)} x2={width - right} y2={y(line.value)} className="record-chart-limit">
+        <title>{line.label}: {line.value}</title>
+      </line>)}
+      <path d={path} className="record-chart-line" />
+      {samples.map((sample, index) => <circle key={sample.id} cx={x(index)} cy={y(sample.value)} r="4" className="record-chart-point">
+        <title>{sample.date}{sample.time ? ` ${sample.time}` : ""}: ${sample.value}{field.u ? ` ${field.u}` : ""}</title>
+      </circle>)}
+    </svg>
+    <div className="record-chart-dates">
+      {labels.map(({ sample, position, key }) => <span key={key} style={{ left: `${position}%` }}>
+        {sample.date}{sample.time ? ` ${sample.time}` : ""}
+      </span>)}
+    </div>
+    {limitLines.length > 0 && <p className="hint">Límites de referencia: {minLimit ?? "—"} a {maxLimit ?? "—"}{field.u ? ` ${field.u}` : ""}</p>}
+  </div>;
+}
+
 function Empty({ children = "Aún no hay elementos." }) {
   return <p className="empty">{children}</p>;
 }
@@ -861,6 +938,9 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
   const [historyPage, setHistoryPage] = useState(1);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
+  const [chartData, setChartData] = useState({ fields: [], records: [] });
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState("");
   useEffect(() => {
     if (preferredFormatId && program.formats.some((format) => format.id === preferredFormatId)) {
       setFormatId(preferredFormatId);
@@ -903,8 +983,37 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
       });
     return () => controller.abort();
   }, [moduleId, month, formatId, historyPage, refreshKey]);
+  const hasRecordChart = moduleId === "agua" || moduleId === "temp";
+  useEffect(() => {
+    if (!hasRecordChart || !formatId) {
+      setChartData({ fields: [], records: [] });
+      setChartLoading(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    setChartLoading(true);
+    setChartError("");
+    setChartData({ fields: [], records: [] });
+    const query = new URLSearchParams({ month, format: formatId });
+    api(`/modules/${encodeURIComponent(moduleId)}/records/chart?${query}`, { signal: controller.signal })
+      .then((result) => setChartData(result))
+      .catch((reason) => {
+        if (reason.name !== "AbortError") setChartError(reason.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setChartLoading(false);
+      });
+    return () => controller.abort();
+  }, [hasRecordChart, moduleId, month, formatId, refreshKey]);
   const format = program.formats.find((item) => item.id === formatId);
   const rows = format ? history.items : [];
+  const chartFields = chartData.fields.filter((field) => {
+    if (field.t !== "num") return false;
+    const name = String(field.n || "").toLocaleLowerCase("es");
+    return moduleId === "agua"
+      ? name.includes("cloro") || name.includes("ph")
+      : name.includes("temperatura") || name.startsWith("temp");
+  });
   const save = async (event) => {
     event.preventDefault();
     if (!format) return;
@@ -932,6 +1041,27 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
           <button className="primary">Guardar registro</button>
         </form>}
       </section>
+      {hasRecordChart && <section className="card">
+        <div className="section-heading">
+          <div>
+            <h2>{moduleId === "agua" ? "Evolución de cloro y pH" : "Evolución de temperatura"}</h2>
+            <p>Mediciones del formato seleccionado · {month}</p>
+          </div>
+        </div>
+        {chartError && <p className="message error" role="alert">{chartError}</p>}
+        {chartLoading ? <p role="status">Cargando mediciones para la gráfica…</p>
+          : chartFields.length ? <div className={moduleId === "agua" ? "record-trends-grid" : ""}>
+            {chartFields.map((field) => <RecordTrendChart
+              key={field.n}
+              field={field}
+              records={chartData.records}
+              variant={moduleId === "agua" ? (String(field.n || "").toLocaleLowerCase("es").includes("cloro") ? "chlorine" : "ph") : "temperature"}
+            />)}
+          </div>
+            : <Empty>{moduleId === "agua"
+              ? "El formato seleccionado no contiene campos numéricos de cloro o pH."
+              : "El formato seleccionado no contiene campos numéricos de temperatura."}</Empty>}
+      </section>}
       <section className="card"><h2>Histórico {month} · {history.total}</h2>
         {historyError && <p className="message error" role="alert">{historyError}</p>}
         {historyLoading ? <p role="status">Cargando registros…</p> : rows.length ? <Table
