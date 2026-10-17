@@ -22,7 +22,7 @@ Abre `http://localhost:5173`.
 npm run build
 ```
 
-Publica el contenido de `dist/`. En producción, el frontend usa por defecto `https://backdiegolechona-1.onrender.com`. Si necesitas otra API, configura `VITE_API_URL` con la URL base pública, sin añadir `/api`. En desarrollo, Vite reenvía las llamadas a `/api` a `http://localhost:3000`. Configura en el backend `CORS_ORIGIN` con el origen público exacto del frontend.
+Publica el contenido de `dist/`. En producción, el frontend usa por defecto `https://backdiegolechona-1.onrender.com`. Si necesitas otra API, configura `VITE_API_URL` con la URL base pública, sin añadir `/api`. En desarrollo, Vite reenvía las llamadas a `/api` a `https://backdiegolechona-1.onrender.com`. Configura en el backend `CORS_ORIGIN` con el origen público exacto del frontend.
 
 Para probar localmente una compilación:
 

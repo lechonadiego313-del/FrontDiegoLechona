@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Children, useCallback, useEffect, useState } from "react";
 
 const MASTER_NAMES = {
   productos: "Productos",
@@ -30,9 +30,30 @@ const API_BASE_URL = (
   (import.meta.env.DEV ? "" : "https://backdiegolechona-1.onrender.com")
 ).replace(/\/+$/, "");
 
+let pendingRequests = 0;
+let pendingWrites = 0;
+
+async function monitoredFetch(url, options) {
+  const isWrite = (options?.method || "GET").toUpperCase() !== "GET";
+  pendingRequests += 1;
+  if (isWrite) pendingWrites += 1;
+  window.dispatchEvent(new CustomEvent("lechona:request-state", {
+    detail: { pending: pendingRequests, writes: pendingWrites },
+  }));
+  try {
+    return await fetch(url, options);
+  } finally {
+    pendingRequests -= 1;
+    if (isWrite) pendingWrites -= 1;
+    window.dispatchEvent(new CustomEvent("lechona:request-state", {
+      detail: { pending: pendingRequests, writes: pendingWrites },
+    }));
+  }
+}
+
 async function api(path, options = {}) {
   const token = sessionStorage.getItem("lechona_access_token");
-  const response = await fetch(`${API_BASE_URL}/api${path}`, {
+  const response = await monitoredFetch(`${API_BASE_URL}/api${path}`, {
     ...options,
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
@@ -64,13 +85,31 @@ function csvCell(value) {
 }
 
 function Table({ headers, children }) {
+  const [page, setPage] = useState(0);
+  const rows = Children.toArray(children);
+  const pageSize = 10;
+  const pageCount = Math.ceil(rows.length / pageSize);
+  const currentPage = Math.min(page, Math.max(0, pageCount - 1));
+
+  useEffect(() => setPage(0), [children]);
+
   return (
-    <div className="table-wrap">
-      <table>
-        <thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
+    <>
+      <div className="table-wrap">
+        <table>
+          <thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
+          <tbody>{rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize)}</tbody>
+        </table>
+      </div>
+      {pageCount > 1 && <nav className="pagination" aria-label="Paginación de tabla">
+        <span>Mostrando {currentPage * pageSize + 1}–{Math.min((currentPage + 1) * pageSize, rows.length)} de {rows.length}</span>
+        <div>
+          <button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Anterior</button>
+          <span>Página {currentPage + 1} de {pageCount}</span>
+          <button type="button" disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>Siguiente</button>
+        </div>
+      </nav>}
+    </>
   );
 }
 
@@ -106,6 +145,16 @@ function Empty({ children = "Aún no hay elementos." }) {
   return <p className="empty">{children}</p>;
 }
 
+function RequestIndicator({ requestState }) {
+  if (!requestState.pending) return null;
+  return (
+    <div className="request-indicator" role="status" aria-live="polite">
+      <span className="loading-spinner" aria-hidden="true" />
+      {requestState.writes > 0 ? "Guardando cambios…" : "Cargando…"}
+    </div>
+  );
+}
+
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem("lechona_access_token") || "");
   const [data, setData] = useState(null);
@@ -119,7 +168,13 @@ export default function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
+  const [requestState, setRequestState] = useState({ pending: 0, writes: 0 });
 
+  useEffect(() => {
+    const updateRequestState = (event) => setRequestState(event.detail);
+    window.addEventListener("lechona:request-state", updateRequestState);
+    return () => window.removeEventListener("lechona:request-state", updateRequestState);
+  }, []);
   const refresh = useCallback(async () => {
     if (!sessionStorage.getItem("lechona_access_token")) {
       setData(null);
@@ -192,8 +247,8 @@ export default function App() {
     setNotice("");
   };
 
-  if (!token) return <Login onLogin={handleLogin} />;
-  if (loading && !data) return <div className="center-state">Cargando el sistema…</div>;
+  if (!token) return <><RequestIndicator requestState={requestState} /><Login onLogin={handleLogin} /></>;
+  if (loading && !data) return <><RequestIndicator requestState={requestState} /><div className="center-state">Cargando el sistema…</div></>;
   if (!data) {
     return (
       <div className="center-state">
@@ -212,6 +267,7 @@ export default function App() {
 
   return (
     <div className="layout">
+      <RequestIndicator requestState={requestState} />
       <aside className="sidebar no-print">
         <div className="brand">
           <div className="brand-mark">DL</div>
@@ -699,16 +755,15 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId 
         </form>}
       </section>
       <section className="card"><h2>Histórico {month} · {rows.length}</h2>
-        {rows.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Fecha</th><th>Responsable</th>{format.fields.map((field) => <th key={field.n}>{field.n}</th>)}<th>Observaciones</th><th>Estado</th><th /></tr></thead>
-          <tbody>{rows.map((record) => <tr key={record.id} className={record.devs.length ? "bad-row" : ""}>
+        {rows.length ? <Table headers={["Fecha", "Responsable", ...format.fields.map((field) => field.n), "Observaciones", "Estado", ""]}>
+          {rows.map((record) => <tr key={record.id} className={record.devs.length ? "bad-row" : ""}>
             <td>{record.date}</td><td>{record.resp || "—"}</td>{format.fields.map((field) => <td key={field.n} className={record.devs.some((item) => item.startsWith(`${field.n}:`)) ? "bad-value" : ""}>{record.vals[field.n] ?? ""}</td>)}
             <td>{record.obs}</td><td><StatusTag bad={record.devs.length > 0}>{record.devs.length ? "Desviación" : "OK"}</StatusTag></td>
             <td><button className="danger-button" onClick={() => {
               if (window.confirm("¿Eliminar este registro?")) notify(() => api(`/modules/${moduleId}/records/${record.id}`, { method: "DELETE" }), "Registro eliminado.");
             }}>Eliminar</button></td>
-          </tr>)}</tbody>
-        </table></div> : <Empty>No hay registros para este formato y mes.</Empty>}</section>
+          </tr>)}
+        </Table> : <Empty>No hay registros para este formato y mes.</Empty>}</section>
     </>
   );
 }
