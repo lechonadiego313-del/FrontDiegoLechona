@@ -13,7 +13,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button {
   border: 1px solid #d6d7e8;
   color: var(--navy);
@@ -25,7 +25,7 @@ button {
 }
 button:hover { border-color: var(--pink); background: #fff8ff; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #e040fb55; outline-offset: 1px; }
-input, select {
+input, select, textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid #d6d7e8;
@@ -34,6 +34,8 @@ input, select {
   color: #24243e;
   padding: 9px 10px;
 }
+textarea { min-height: 82px; resize: vertical; }
+.corrective-management { border-top: 4px solid var(--pink); }
 label { display: flex; flex-direction: column; gap: 5px; color: #57576c; font-size: 12px; }
 h1, h2, p { margin-top: 0; }
 h1 { margin-bottom: 0; color: var(--navy); font-size: 26px; letter-spacing: -.4px; }
@@ -94,6 +96,10 @@ p { line-height: 1.55; }
 .trend-point { fill: white; stroke: var(--pink); stroke-width: 3; }
 .trend-labels { display: flex; justify-content: space-between; color: #73738a; font-size: 10px; }
 .trend-labels b { color: var(--navy); }
+.record-trends { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 14px; }
+.record-trend { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 11px; background: #fcfbff; }
+.record-trend h3 { margin: 0; color: var(--navy); font-size: 14px; }
+.record-trend .trend-chart { margin-top: 8px; }
 .program-bars { display: grid; gap: 8px; }
 .bar-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr 38px minmax(110px, 145px); gap: 10px; align-items: center; font-size: 11px; }
 .bar-track { height: 9px; border-radius: 9px; overflow: hidden; background: #eeeefa; }

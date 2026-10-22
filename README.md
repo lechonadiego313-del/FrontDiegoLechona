@@ -5,7 +5,7 @@ Interfaz React y Vite para la API de Diego Lechona.
 ## Requisitos y desarrollo
 
 - Node.js 20 o superior
-- La API disponible en `http://localhost:3000` (el servidor de desarrollo reenvía `/api` a esa dirección)
+- La API disponible en `https://backdiegolechona-1.onrender.com` (el servidor de desarrollo reenvía `/api` a esa dirección)
 
 Instala las dependencias e inicia Vite:
 

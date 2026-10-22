@@ -14,6 +14,7 @@ const FIELD_TYPES = {
   date: "Fecha",
   sel: "Lista de opciones",
   chk: "Sí / No",
+  cumple: "Cumple / No cumple",
   producto: "Producto",
   area: "Área",
   punto: "Punto de muestreo",
@@ -609,6 +610,7 @@ function Masters({ data, notify, setError }) {
   const [category, setCategory] = useState("");
   const [value, setValue] = useState("");
   const [filter, setFilter] = useState("");
+  const [equipmentConfig, setEquipmentConfig] = useState({ type: "Refrigeración", min: "0", max: "4" });
   const name = MASTER_NAMES[category];
   const items = data.masters[category] || [];
   const filteredItems = items.filter((item) =>
@@ -619,6 +621,7 @@ function Masters({ data, notify, setError }) {
     setCategory(nextCategory);
     setFilter("");
     setValue("");
+    setEquipmentConfig({ type: "Refrigeración", min: "0", max: "4" });
     setError("");
   };
 
@@ -637,11 +640,28 @@ function Masters({ data, notify, setError }) {
       return;
     }
     const saved = await notify(
-      () => api(`/masters/${category}`, { method: "POST", body: JSON.stringify({ value: normalizedValue }) }),
+      () => api(`/masters/${category}`, {
+        method: "POST",
+        body: JSON.stringify({ value: normalizedValue, ...(category === "equipos" ? { config: equipmentConfig } : {}) }),
+      }),
       `Se agregó el elemento a ${name.toLocaleLowerCase("es")}.`,
       "bootstrap",
     );
     if (saved) setValue("");
+  };
+
+  const configureEquipment = async (item) => {
+    const type = window.prompt("Tipo de equipo: Refrigeración o Congelación", item.config?.type || "Refrigeración");
+    if (type === null) return;
+    const min = window.prompt("Temperatura mínima permitida (°C)", item.config?.min ?? "0");
+    if (min === null) return;
+    const max = window.prompt("Temperatura máxima permitida (°C)", item.config?.max ?? "4");
+    if (max === null) return;
+    await notify(
+      () => api(`/masters/equipos/${item.id}`, { method: "PUT", body: JSON.stringify({ config: { type, min, max } }) }),
+      `Se actualizó el rango de “${item.value}”.`,
+      "bootstrap",
+    );
   };
 
   const removeItem = (item) => {
@@ -676,6 +696,13 @@ function Masters({ data, notify, setError }) {
               maxLength={200}
             />
           </label>
+          {category === "equipos" && <>
+            <label>Tipo de conservación<select value={equipmentConfig.type} onChange={(event) => setEquipmentConfig({ ...equipmentConfig, type: event.target.value })}>
+              <option>Refrigeración</option><option>Congelación</option>
+            </select></label>
+            <label>Temperatura mínima (°C)<input required type="number" step="any" value={equipmentConfig.min} onChange={(event) => setEquipmentConfig({ ...equipmentConfig, min: event.target.value })} /></label>
+            <label>Temperatura máxima (°C)<input required type="number" step="any" value={equipmentConfig.max} onChange={(event) => setEquipmentConfig({ ...equipmentConfig, max: event.target.value })} /></label>
+          </>}
           <button className="primary" type="submit">Agregar</button>
           <label className="master-filter">
             Filtrar tabla
@@ -694,13 +721,15 @@ function Masters({ data, notify, setError }) {
             : `Mostrando ${filteredItems.length} de ${items.length} elemento(s)`}
         </div>
         {filteredItems.length ? (
-          <Table headers={["#", "Nombre", "Fecha de creación", "Acciones"]}>
+          <Table headers={category === "equipos" ? ["#", "Nombre", "Tipo", "Rango", "Fecha de creación", "Acciones"] : ["#", "Nombre", "Fecha de creación", "Acciones"]}>
             {filteredItems.map((item, index) => (
               <tr key={item.id}>
                 <td>{index + 1}</td>
                 <td className="master-value">{item.value}</td>
+                {category === "equipos" && <><td>{item.config?.type || "Sin configurar"}</td><td>{item.config?.min != null && item.config?.max != null ? `${item.config.min} a ${item.config.max} °C` : "—"}</td></>}
                 <td>{item.createdAt ? new Date(item.createdAt).toLocaleDateString("es-CO") : "—"}</td>
                 <td>
+                  {category === "equipos" && <button onClick={() => configureEquipment(item)}>Configurar</button>}
                   <button className="danger-button" onClick={() => removeItem(item)}>Eliminar</button>
                 </td>
               </tr>
@@ -861,6 +890,8 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
   const [historyPage, setHistoryPage] = useState(1);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
+  const [trendRecords, setTrendRecords] = useState([]);
+  const [trendsLoading, setTrendsLoading] = useState(false);
   useEffect(() => {
     if (preferredFormatId && program.formats.some((format) => format.id === preferredFormatId)) {
       setFormatId(preferredFormatId);
@@ -905,6 +936,31 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
   }, [moduleId, month, formatId, historyPage, refreshKey]);
   const format = program.formats.find((item) => item.id === formatId);
   const rows = format ? history.items : [];
+  const showTrends = moduleId === "agua" || moduleId === "temp";
+  const numericFields = format?.fields.filter((field) => field.t === "num") || [];
+  const equipmentField = format?.fields.find((field) => field.t === "equipo");
+  const selectedEquipment = moduleId === "temp" && equipmentField
+    ? (masters.equipos || []).find((item) => item.value === values[equipmentField.n])
+    : null;
+  useEffect(() => {
+    if (!showTrends || !formatId) {
+      setTrendRecords([]);
+      setTrendsLoading(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const query = new URLSearchParams({ month, format: formatId });
+    setTrendsLoading(true);
+    api(`/modules/${encodeURIComponent(moduleId)}/records?${query}`, { signal: controller.signal })
+      .then(setTrendRecords)
+      .catch((reason) => {
+        if (reason.name !== "AbortError") setHistoryError(reason.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setTrendsLoading(false);
+      });
+    return () => controller.abort();
+  }, [moduleId, month, formatId, refreshKey, showTrends]);
   const save = async (event) => {
     event.preventDefault();
     if (!format) return;
@@ -927,11 +983,33 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
         {format && <form className="form-grid record-form" onSubmit={save}>
           <label>Fecha<input type="date" required min={`${month}-01`} max={endOfMonth(month)} value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} /></label>
           <label>Responsable<input value={meta.resp} onChange={(e) => setMeta({ ...meta, resp: e.target.value })} /></label>
-          {format.fields.map((field) => <FieldInput key={field.n} field={field} masters={masters} value={values[field.n] ?? ""} onChange={(value) => setValues({ ...values, [field.n]: value })} />)}
+          {format.fields.map((field) => {
+            const usesEquipmentRange = selectedEquipment?.config && field.t === "num" && field.n.toLocaleLowerCase("es").includes("temperatura");
+            const effectiveField = usesEquipmentRange
+              ? { ...field, min: selectedEquipment.config.min, max: selectedEquipment.config.max }
+              : field;
+            return <FieldInput key={field.n} field={effectiveField} masters={masters} value={values[field.n] ?? ""} onChange={(value) => setValues({ ...values, [field.n]: value })} />;
+          })}
           <label className="wide-field">Observaciones<input value={meta.obs} onChange={(e) => setMeta({ ...meta, obs: e.target.value })} /></label>
           <button className="primary">Guardar registro</button>
         </form>}
       </section>
+      {showTrends && numericFields.length > 0 && <section className="card">
+        <div className="section-heading"><div><h2>Gráficas del histórico</h2><p>Tendencias de {format.name} en {month}</p></div></div>
+        {trendsLoading ? <p role="status">Cargando gráficas…</p> : <div className="record-trends">
+          {numericFields.map((field) => {
+            const series = trendRecords
+              .filter((record) => record.vals?.[field.n] !== "" && record.vals?.[field.n] != null)
+              .sort((a, b) => a.date.localeCompare(b.date))
+              .map((record) => ({ date: record.date, value: Number(record.vals[field.n]) }))
+              .filter((record) => Number.isFinite(record.value));
+            return <article className="record-trend" key={field.n}>
+              <h3>{field.n}{field.u ? ` (${field.u})` : ""}</h3>
+              <TrendChart rows={series} field={field} />
+            </article>;
+          })}
+        </div>}
+      </section>}
       <section className="card"><h2>Histórico {month} · {history.total}</h2>
         {historyError && <p className="message error" role="alert">{historyError}</p>}
         {historyLoading ? <p role="status">Cargando registros…</p> : rows.length ? <Table
@@ -959,7 +1037,9 @@ function FieldInput({ field, masters, value, onChange }) {
   const masterCategory = { producto: "productos", area: "areas", punto: "puntos", proveedor: "proveedores", cliente: "clientes", equipo: "equipos" }[field.t];
   const label = `${field.n}${field.t === "num" && (field.u || field.min !== "" || field.max !== "") ? ` (${field.u}${field.min !== "" || field.max !== "" ? ` ${field.min ?? ""}–${field.max ?? ""}` : ""})` : ""}`;
   if (field.t === "chk") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option><option>Sí</option><option>No</option></select></label>;
+  if (field.t === "cumple") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option><option>Cumple</option><option>No cumple</option></select></label>;
   if (field.t === "sel") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option>{String(field.u || "").split(",").map((item) => item.trim()).filter(Boolean).map((item) => <option key={item}>{item}</option>)}</select></label>;
+  if (field.t === "equipo") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option>{(masters.equipos || []).map((item) => <option key={item.id} value={item.value}>{item.value}{item.config?.type ? ` · ${item.config.type} (${item.config.min} a ${item.config.max} °C)` : ""}</option>)}</select></label>;
   if (masterCategory) return <label>{label}<input list={`master-${field.t}`} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Elegir o escribir" /><datalist id={`master-${field.t}`}>{(masters[masterCategory] || []).map((item) => <option key={item.id} value={item.value} />)}</datalist></label>;
   return <label>{label}<input type={field.t === "num" ? "number" : field.t === "date" ? "date" : "text"} step={field.t === "num" ? "any" : undefined} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
 }
@@ -987,10 +1067,32 @@ function Schedules({ moduleId, schedules, notify }) {
 
 function Actions({ moduleId, actions, notify }) {
   const [form, setForm] = useState({ desc: "", resp: "", due: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10) });
+  const [editing, setEditing] = useState(null);
   const add = async (event) => {
     event.preventDefault();
     const saved = await notify(() => api(`/modules/${moduleId}/actions`, { method: "POST", body: JSON.stringify(form) }), "Acción correctiva creada.");
     if (saved) setForm({ desc: "", resp: "", due: form.due });
+  };
+  const manage = (item) => setEditing({
+    id: item.id,
+    desc: item.desc,
+    resp: item.resp || "",
+    due: item.due,
+    e: item.e,
+    correction: item.correction || "",
+    cause: item.cause || "",
+    actionPlan: item.actionPlan || "",
+    evidence: item.evidence || "",
+    verification: item.verification || "",
+    closedBy: item.closedBy || "",
+  });
+  const saveManagement = async (event) => {
+    event.preventDefault();
+    const saved = await notify(
+      () => api(`/modules/${moduleId}/actions/${editing.id}`, { method: "PUT", body: JSON.stringify(editing) }),
+      editing.e === "Cerrada" ? "Acción verificada y cerrada." : "Seguimiento de la acción actualizado.",
+    );
+    if (saved) setEditing(null);
   };
   return <>
     <section className="card"><h2>Crear acción correctiva</h2><form className="form-grid" onSubmit={add}>
@@ -998,12 +1100,27 @@ function Actions({ moduleId, actions, notify }) {
       <label>Responsable<input value={form.resp} onChange={(e) => setForm({ ...form, resp: e.target.value })} /></label>
       <label>Fecha límite<input type="date" required value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} /></label><button className="primary">Crear acción</button>
     </form></section>
-    <section className="card"><h2>Acciones</h2>{actions.length ? <Table headers={["Acción", "Responsable", "Límite", "Estado", "Cierre", ""]}>
-      {actions.map((item) => <tr className={item.e === "Abierta" && item.due < TODAY ? "bad-row" : ""} key={item.id}><td>{item.desc}</td><td>{item.resp || "—"}</td><td>{item.due}</td><td>{item.e}</td><td>{item.cierre}</td><td className="action-cell">
-        {item.e === "Abierta" && <button onClick={() => {
-          const cierre = window.prompt("Describe la acción realizada y la verificación de eficacia:");
-          if (cierre !== null) notify(() => api(`/modules/${moduleId}/actions/${item.id}/close`, { method: "POST", body: JSON.stringify({ cierre }) }), "Acción cerrada.");
-        }}>Cerrar</button>}
+    {editing && <section className="card corrective-management">
+      <div className="section-heading"><div><h2>Gestionar acción correctiva</h2><p>{editing.desc}</p></div></div>
+      <form className="form-grid" onSubmit={saveManagement}>
+        <label>Responsable<input required value={editing.resp} onChange={(e) => setEditing({ ...editing, resp: e.target.value })} /></label>
+        <label>Fecha límite<input required type="date" value={editing.due} onChange={(e) => setEditing({ ...editing, due: e.target.value })} /></label>
+        <label>Estado<select value={editing.e} onChange={(e) => setEditing({ ...editing, e: e.target.value })}>
+          <option>Abierta</option><option>En proceso</option><option>Pendiente de verificación</option><option>Cerrada</option>
+        </select></label>
+        <label className="wide-field">Corrección inmediata<textarea required={editing.e === "Cerrada"} value={editing.correction} onChange={(e) => setEditing({ ...editing, correction: e.target.value })} placeholder="¿Qué se hizo para controlar el problema en el momento?" /></label>
+        <label className="wide-field">Causa identificada<textarea required={editing.e === "Cerrada"} value={editing.cause} onChange={(e) => setEditing({ ...editing, cause: e.target.value })} placeholder="¿Por qué ocurrió el incumplimiento?" /></label>
+        <label className="wide-field">Plan de acción correctiva<textarea required={editing.e === "Cerrada"} value={editing.actionPlan} onChange={(e) => setEditing({ ...editing, actionPlan: e.target.value })} placeholder="¿Qué evitará que vuelva a suceder?" /></label>
+        <label className="wide-field">Evidencia<textarea required={editing.e === "Cerrada"} value={editing.evidence} onChange={(e) => setEditing({ ...editing, evidence: e.target.value })} placeholder="Documento, fotografía, registro, orden de trabajo o descripción de la evidencia" /></label>
+        <label className="wide-field">Verificación de eficacia<textarea required={editing.e === "Cerrada"} value={editing.verification} onChange={(e) => setEditing({ ...editing, verification: e.target.value })} placeholder="Resultado del seguimiento que demuestra que la acción funcionó" /></label>
+        <label>Responsable del cierre<input required={editing.e === "Cerrada"} value={editing.closedBy} onChange={(e) => setEditing({ ...editing, closedBy: e.target.value })} /></label>
+        <div className="action-row"><button className="primary">Guardar seguimiento</button><button type="button" onClick={() => setEditing(null)}>Cancelar</button></div>
+      </form>
+      {editing.e === "Cerrada" && <p className="hint">La acción solo se cerrará si todos los campos y la verificación de eficacia están completos.</p>}
+    </section>}
+    <section className="card"><h2>Acciones</h2>{actions.length ? <Table headers={["Acción", "Responsable", "Límite", "Estado", "Seguimiento", ""]}>
+      {actions.map((item) => <tr className={item.e !== "Cerrada" && item.due < TODAY ? "bad-row" : ""} key={item.id}><td>{item.desc}</td><td>{item.resp || "—"}</td><td>{item.due}</td><td><StatusTag bad={item.e !== "Cerrada"}>{item.e}</StatusTag></td><td>{item.e === "Cerrada" ? `${item.closedOn || ""} · ${item.closedBy || ""}` : item.actionPlan || "Pendiente de documentar"}</td><td className="action-cell">
+        <button onClick={() => manage(item)}>{item.e === "Cerrada" ? "Ver / editar" : "Gestionar"}</button>
         <button className="danger-button" onClick={() => notify(() => api(`/modules/${moduleId}/actions/${item.id}`, { method: "DELETE" }), "Acción eliminada.")}>Eliminar</button>
       </td></tr>)}
     </Table> : <Empty />}</section>
