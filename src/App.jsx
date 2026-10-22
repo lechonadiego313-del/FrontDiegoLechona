@@ -25,6 +25,25 @@ const FIELD_TYPES = {
 };
 const TODAY = new Date().toISOString().slice(0, 10);
 const DEFAULT_MONTH = TODAY.slice(0, 7);
+const emptyMasters = () => Object.fromEntries(Object.keys(MASTER_NAMES).map((key) => [key, []]));
+const normalizeBootstrap = (payload) => ({
+  ...(payload && typeof payload === "object" ? payload : {}),
+  modules: Array.isArray(payload?.modules) ? payload.modules : [],
+  masters: { ...emptyMasters(), ...(payload?.masters && typeof payload.masters === "object" ? payload.masters : {}) },
+  formats: Array.isArray(payload?.formats) ? payload.formats : [],
+  lastBackup: payload?.lastBackup || "",
+});
+const normalizeProgram = (payload, moduleId) => {
+  const source = payload?.programs?.[moduleId] || payload || {};
+  return {
+    ...source,
+    documents: Array.isArray(source.documents) ? source.documents : [],
+    formats: Array.isArray(source.formats) ? source.formats : [],
+    records: Array.isArray(source.records) ? source.records : [],
+    schedules: Array.isArray(source.schedules) ? source.schedules : [],
+    actions: Array.isArray(source.actions) ? source.actions : [],
+  };
+};
 const newField = () => ({ n: "", t: "txt", u: "", min: "", max: "" });
 const dateForMonth = (month) => month === DEFAULT_MONTH ? TODAY : `${month}-01`;
 const endOfMonth = (month) => {
@@ -261,7 +280,7 @@ export default function App() {
     setError("");
     try {
       const [bootstrap, user] = await Promise.all([api("/bootstrap"), api("/auth/me")]);
-      setData(bootstrap);
+      setData(normalizeBootstrap(bootstrap));
       setCurrentUser(user);
     } catch (reason) {
       setError(reason.message);
@@ -279,7 +298,7 @@ export default function App() {
     setProgramLoading(!programs[programKey]);
     api(`/modules/${encodeURIComponent(moduleId)}?month=${encodeURIComponent(month)}&records=0`, { signal: controller.signal })
       .then((program) => {
-        if (active) setPrograms((current) => ({ ...current, [programKey]: program }));
+        if (active) setPrograms((current) => ({ ...current, [programKey]: normalizeProgram(program, moduleId) }));
       })
       .catch((reason) => {
         if (active && reason.name !== "AbortError") setError(reason.message);
@@ -321,7 +340,7 @@ export default function App() {
       if (successMessage) setNotice(successMessage);
       if (refreshScope === "bootstrap") {
         const bootstrap = await api("/bootstrap");
-        setData(bootstrap);
+        setData(normalizeBootstrap(bootstrap));
       } else {
         setModuleRefresh((value) => value + 1);
       }
@@ -368,7 +387,7 @@ export default function App() {
     );
   }
 
-  const module = data.modules.find((item) => item.id === moduleId);
+  const module = (data.modules || []).find((item) => item.id === moduleId);
   const program = programs[`${moduleId}:${month}`];
   const isSpecialView = ["dash", "mae", "bk", "users"].includes(view);
   const canManageUsers = currentUser && ["super", "user_admin"].includes(currentUser.role);
@@ -385,7 +404,7 @@ export default function App() {
         </div>
         <button className={`nav-item ${view === "dash" ? "active" : ""}`} onClick={() => setView("dash")}>Dashboard</button>
         <div className="nav-label">Programas</div>
-        {data.modules.map((item) => (
+        {(data.modules || []).map((item) => (
           <button key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => openModule(item.id)}>
             {item.name}
           </button>
@@ -443,7 +462,7 @@ export default function App() {
             {tab === "res" && <ProgramSummary program={program} report={currentMonthReport} moduleId={moduleId} />}
             {tab === "doc" && <Documents moduleId={moduleId} documents={program.documents} notify={notify} />}
             {tab === "fmt" && <Formats moduleId={moduleId} formats={program.formats} notify={notify} onSelectFormat={(id) => { setPreferredFormatId(id); setTab("reg"); }} />}
-            {tab === "reg" && <Records moduleId={moduleId} program={program} masters={data.masters} month={month} notify={notify} preferredFormatId={preferredFormatId} refreshKey={moduleRefresh} />}
+            {tab === "reg" && <Records moduleId={moduleId} program={program} masters={data.masters || emptyMasters()} month={month} notify={notify} preferredFormatId={preferredFormatId} refreshKey={moduleRefresh} />}
             {tab === "cro" && <Schedules moduleId={moduleId} schedules={program.schedules} notify={notify} />}
             {tab === "acc" && <Actions moduleId={moduleId} actions={program.actions} notify={notify} />}
             {tab === "ale" && <Alerts alerts={currentMonthReport?.alerts || []} />}
@@ -612,7 +631,8 @@ function Masters({ data, notify, setError }) {
   const [filter, setFilter] = useState("");
   const [equipmentConfig, setEquipmentConfig] = useState({ type: "Refrigeración", min: "0", max: "4" });
   const name = MASTER_NAMES[category];
-  const items = data.masters[category] || [];
+  const masters = data.masters || emptyMasters();
+  const items = masters[category] || [];
   const filteredItems = items.filter((item) =>
     item.value.toLocaleLowerCase("es").includes(filter.trim().toLocaleLowerCase("es")),
   );
@@ -753,7 +773,7 @@ function Masters({ data, notify, setError }) {
       </div>
       <div className="master-grid">
         {Object.entries(MASTER_NAMES).map(([key, label]) => {
-          const count = (data.masters[key] || []).length;
+          const count = (masters[key] || []).length;
           return (
             <button className="master-card" key={key} onClick={() => openCategory(key)}>
               <span className="master-card-icon">{label.charAt(0)}</span>
