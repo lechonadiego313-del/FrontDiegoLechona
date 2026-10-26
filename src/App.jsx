@@ -53,11 +53,11 @@ const endOfMonth = (month) => {
 };
 const API_BASE_URL = (
   import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV ? "" : "http://localhost:3000")
+  (import.meta.env.DEV ? "" : "https://backdiegolechona-1.onrender.com")
 ).replace(/\/+$/, "");
 const GET_CACHE_TTL_MS = 15_000;
 const getCache = new Map();
-const pendingGets = new Map();
+const pendingGets = new Map();   
 let apiCacheGeneration = 0;
 
 let pendingRequests = 0;
