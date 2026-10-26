@@ -1,4 +1,5 @@
 import { Children, useCallback, useEffect, useState } from "react";
+import DispatchControl from "./DispatchControl.jsx";
 
 const MASTER_NAMES = {
   productos: "Productos",
@@ -52,7 +53,7 @@ const endOfMonth = (month) => {
 };
 const API_BASE_URL = (
   import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV ? "" : "https://backdiegolechona-1.onrender.com")
+  (import.meta.env.DEV ? "" : "http://localhost:3000")
 ).replace(/\/+$/, "");
 const GET_CACHE_TTL_MS = 15_000;
 const getCache = new Map();
@@ -291,7 +292,7 @@ export default function App() {
 
   useEffect(() => { refresh(); }, [refresh, token]);
   useEffect(() => {
-    if (!token || !data || ["dash", "mae", "bk", "users"].includes(view)) return;
+    if (!token || !data || ["dash", "mae", "bk", "users", "dispatch-control"].includes(view)) return;
     let active = true;
     const controller = new AbortController();
     const programKey = `${moduleId}:${month}`;
@@ -325,7 +326,7 @@ export default function App() {
     let active = true;
     const controller = new AbortController();
     setReportLoading(true);
-    api(`/reports?month=${encodeURIComponent(month)}${view !== "dash" && view !== "mae" && view !== "bk" && view !== "users" ? `&module=${encodeURIComponent(moduleId)}` : ""}`, { signal: controller.signal })
+    api(`/reports?month=${encodeURIComponent(month)}${!["dash", "mae", "bk", "users", "dispatch-control"].includes(view) ? `&module=${encodeURIComponent(moduleId)}` : ""}`, { signal: controller.signal })
       .then((result) => { if (active) setReport(result); })
       .catch((reason) => { if (active && reason.name !== "AbortError") setError(reason.message); })
       .finally(() => { if (active) setReportLoading(false); });
@@ -389,7 +390,7 @@ export default function App() {
 
   const module = (data.modules || []).find((item) => item.id === moduleId);
   const program = programs[`${moduleId}:${month}`];
-  const isSpecialView = ["dash", "mae", "bk", "users"].includes(view);
+  const isSpecialView = ["dash", "mae", "bk", "users", "dispatch-control"].includes(view);
   const canManageUsers = currentUser && ["super", "user_admin"].includes(currentUser.role);
   const currentMonthReport = report;
 
@@ -409,6 +410,8 @@ export default function App() {
             {item.name}
           </button>
         ))}
+        <div className="nav-label">Control de salidas</div>
+        <button className={`nav-item ${view === "dispatch-control" ? "active" : ""}`} onClick={() => setView("dispatch-control")}>Despacho y ventas</button>
         <div className="nav-label">Administración</div>
         <button className={`nav-item ${view === "mae" ? "active" : ""}`} onClick={() => setView("mae")}>Maestros</button>
         {/* <button className={`nav-item ${view === "bk" ? "active" : ""}`} onClick={() => setView("bk")}>Backup / Datos</button> */}
@@ -418,7 +421,7 @@ export default function App() {
         <header className="topbar no-print">
           <div>
             <span className="eyebrow">GESTIÓN DE CALIDAD E INOCUIDAD</span>
-            <h1>{view === "dash" ? "Dashboard" : view === "mae" ? "Maestros" : view === "bk" ? "Backup / Datos" : view === "users" ? "Usuarios" : module?.name}</h1>
+            <h1>{view === "dash" ? "Dashboard" : view === "mae" ? "Maestros" : view === "bk" ? "Backup / Datos" : view === "users" ? "Usuarios" : view === "dispatch-control" ? "Control de salidas" : module?.name}</h1>
           </div>
           <div className="topbar-actions">
           {!isSpecialView && (
@@ -441,6 +444,7 @@ export default function App() {
         {view === "mae" && <Masters data={data} notify={notify} setError={setError} />}
         {view === "bk" && <Backup lastBackup={data.lastBackup} month={month} notify={notify} />}
         {view === "users" && canManageUsers && <UserManagement currentUser={currentUser} />}
+        {view === "dispatch-control" && <DispatchControl api={api} currentUser={currentUser} setError={setError} setNotice={setNotice} />}
         {!isSpecialView && !program && (programLoading
           ? <ModuleLoading />
           : <section className="card module-load-error">
