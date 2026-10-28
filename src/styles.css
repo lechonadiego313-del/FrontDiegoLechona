@@ -304,3 +304,4 @@ button:disabled { cursor: wait; opacity: .65; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }
+.evidence-panel{border:1px solid var(--line);border-radius:12px;padding:16px}.evidence-panel h3{margin-top:0}.evidence-row{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}.evidence-row>div{display:flex;flex:1;flex-direction:column}.evidence-upload{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:10px;align-items:end;margin-top:14px}@media(max-width:850px){.evidence-upload{grid-template-columns:1fr}.evidence-row{align-items:flex-start;flex-wrap:wrap}}

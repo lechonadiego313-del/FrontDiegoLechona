@@ -8,6 +8,10 @@ const MASTER_NAMES = {
   proveedores: "Proveedores",
   clientes: "Clientes",
   equipos: "Equipos / cámaras",
+  personal: "Personal",
+  superficies: "Superficies",
+  utensilios: "Utensilios",
+  tipos_plagas: "Tipos de plagas",
 };
 const FIELD_TYPES = {
   num: "Número",
@@ -22,6 +26,9 @@ const FIELD_TYPES = {
   proveedor: "Proveedor",
   cliente: "Cliente",
   equipo: "Equipo",
+  superficie: "Superficie",
+  utensilio: "Utensilio",
+  tipo_plaga: "Tipo de plaga",
   lote: "Lote",
 };
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -467,8 +474,8 @@ export default function App() {
             {tab === "doc" && <Documents moduleId={moduleId} documents={program.documents} notify={notify} />}
             {tab === "fmt" && <Formats moduleId={moduleId} formats={program.formats} notify={notify} onSelectFormat={(id) => { setPreferredFormatId(id); setTab("reg"); }} />}
             {tab === "reg" && <Records moduleId={moduleId} program={program} masters={data.masters || emptyMasters()} month={month} notify={notify} preferredFormatId={preferredFormatId} refreshKey={moduleRefresh} />}
-            {tab === "cro" && <Schedules moduleId={moduleId} schedules={program.schedules} notify={notify} />}
-            {tab === "acc" && <Actions moduleId={moduleId} actions={program.actions} notify={notify} />}
+            {tab === "cro" && <Schedules moduleId={moduleId} schedules={program.schedules} notify={notify} personnel={data.masters?.personal || []} />}
+            {tab === "acc" && <Actions moduleId={moduleId} actions={program.actions} notify={notify} personnel={data.masters?.personal || []} />}
             {tab === "ale" && <Alerts alerts={currentMonthReport?.alerts || []} />}
             {tab === "inf" && <Report report={currentMonthReport} month={month} onPrint={() => window.print()} />}
             {tab === "rast" && moduleId === "traz" && <Traceability />}
@@ -634,6 +641,7 @@ function Masters({ data, notify, setError }) {
   const [value, setValue] = useState("");
   const [filter, setFilter] = useState("");
   const [equipmentConfig, setEquipmentConfig] = useState({ type: "Refrigeración", min: "0", max: "4" });
+  const [personnelCargo, setPersonnelCargo] = useState("");
   const name = MASTER_NAMES[category];
   const masters = data.masters || emptyMasters();
   const items = masters[category] || [];
@@ -646,6 +654,7 @@ function Masters({ data, notify, setError }) {
     setFilter("");
     setValue("");
     setEquipmentConfig({ type: "Refrigeración", min: "0", max: "4" });
+    setPersonnelCargo("");
     setError("");
   };
 
@@ -666,7 +675,7 @@ function Masters({ data, notify, setError }) {
     const saved = await notify(
       () => api(`/masters/${category}`, {
         method: "POST",
-        body: JSON.stringify({ value: normalizedValue, ...(category === "equipos" ? { config: equipmentConfig } : {}) }),
+        body: JSON.stringify({ value: normalizedValue, ...(category === "equipos" ? { config: equipmentConfig } : category === "personal" ? { config: { cargo: personnelCargo } } : {}) }),
       }),
       `Se agregó el elemento a ${name.toLocaleLowerCase("es")}.`,
       "bootstrap",
@@ -727,6 +736,7 @@ function Masters({ data, notify, setError }) {
             <label>Temperatura mínima (°C)<input required type="number" step="any" value={equipmentConfig.min} onChange={(event) => setEquipmentConfig({ ...equipmentConfig, min: event.target.value })} /></label>
             <label>Temperatura máxima (°C)<input required type="number" step="any" value={equipmentConfig.max} onChange={(event) => setEquipmentConfig({ ...equipmentConfig, max: event.target.value })} /></label>
           </>}
+          {category === "personal" && <label>Cargo<input required value={personnelCargo} maxLength="120" onChange={(event) => setPersonnelCargo(event.target.value)} placeholder="Cargo o función" /></label>}
           <button className="primary" type="submit">Agregar</button>
           <label className="master-filter">
             Filtrar tabla
@@ -745,12 +755,13 @@ function Masters({ data, notify, setError }) {
             : `Mostrando ${filteredItems.length} de ${items.length} elemento(s)`}
         </div>
         {filteredItems.length ? (
-          <Table headers={category === "equipos" ? ["#", "Nombre", "Tipo", "Rango", "Fecha de creación", "Acciones"] : ["#", "Nombre", "Fecha de creación", "Acciones"]}>
+          <Table headers={category === "equipos" ? ["#", "Nombre", "Tipo", "Rango", "Fecha de creación", "Acciones"] : category === "personal" ? ["#", "Nombre", "Cargo", "Fecha de creación", "Acciones"] : ["#", "Nombre", "Fecha de creación", "Acciones"]}>
             {filteredItems.map((item, index) => (
               <tr key={item.id}>
                 <td>{index + 1}</td>
                 <td className="master-value">{item.value}</td>
                 {category === "equipos" && <><td>{item.config?.type || "Sin configurar"}</td><td>{item.config?.min != null && item.config?.max != null ? `${item.config.min} a ${item.config.max} °C` : "—"}</td></>}
+                {category === "personal" && <td>{item.config?.cargo || "—"}</td>}
                 <td>{item.createdAt ? new Date(item.createdAt).toLocaleDateString("es-CO") : "—"}</td>
                 <td>
                   {category === "equipos" && <button onClick={() => configureEquipment(item)}>Configurar</button>}
@@ -1006,7 +1017,7 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
         <label className="compact-label">Formato<select id="record-format" value={formatId} onChange={(e) => setFormatId(e.target.value)}>{program.formats.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         {format && <form className="form-grid record-form" onSubmit={save}>
           <label>Fecha<input type="date" required min={`${month}-01`} max={endOfMonth(month)} value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} /></label>
-          <label>Responsable<input value={meta.resp} onChange={(e) => setMeta({ ...meta, resp: e.target.value })} /></label>
+          <label>Responsable<input list="personnel-records" value={meta.resp} onChange={(e) => setMeta({ ...meta, resp: e.target.value })} /></label><PersonnelOptions id="personnel-records" items={masters.personal || []} />
           {format.fields.map((field) => {
             const usesEquipmentRange = selectedEquipment?.config && field.t === "num" && field.n.toLocaleLowerCase("es").includes("temperatura");
             const effectiveField = usesEquipmentRange
@@ -1058,7 +1069,7 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
 }
 
 function FieldInput({ field, masters, value, onChange }) {
-  const masterCategory = { producto: "productos", area: "areas", punto: "puntos", proveedor: "proveedores", cliente: "clientes", equipo: "equipos" }[field.t];
+  const masterCategory = { producto: "productos", area: "areas", punto: "puntos", proveedor: "proveedores", cliente: "clientes", equipo: "equipos", superficie: "superficies", utensilio: "utensilios", tipo_plaga: "tipos_plagas" }[field.t];
   const label = `${field.n}${field.t === "num" && (field.u || field.min !== "" || field.max !== "") ? ` (${field.u}${field.min !== "" || field.max !== "" ? ` ${field.min ?? ""}–${field.max ?? ""}` : ""})` : ""}`;
   if (field.t === "chk") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option><option>Sí</option><option>No</option></select></label>;
   if (field.t === "cumple") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option><option>Cumple</option><option>No cumple</option></select></label>;
@@ -1068,7 +1079,7 @@ function FieldInput({ field, masters, value, onChange }) {
   return <label>{label}<input type={field.t === "num" ? "number" : field.t === "date" ? "date" : "text"} step={field.t === "num" ? "any" : undefined} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
 }
 
-function Schedules({ moduleId, schedules, notify }) {
+function Schedules({ moduleId, schedules, notify, personnel }) {
   const [form, setForm] = useState({ name: "", date: TODAY, rep: "Única", resp: "" });
   const add = async (event) => {
     event.preventDefault();
@@ -1080,7 +1091,7 @@ function Schedules({ moduleId, schedules, notify }) {
       <label>Actividad<input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
       <label>Fecha<input type="date" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></label>
       <label>Repetir<select value={form.rep} onChange={(e) => setForm({ ...form, rep: e.target.value })}>{[["Única", "Única"], ["1", "Diaria"], ["7", "Semanal"], ["15", "Quincenal"], ["30", "Mensual"], ["90", "Trimestral"], ["180", "Semestral"], ["365", "Anual"]].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <label>Responsable<input value={form.resp} onChange={(e) => setForm({ ...form, resp: e.target.value })} /></label><button className="primary">Agregar</button>
+      <label>Responsable<input list="personnel-schedules" value={form.resp} onChange={(e) => setForm({ ...form, resp: e.target.value })} /></label><PersonnelOptions id="personnel-schedules" items={personnel} /><button className="primary">Agregar</button>
     </form></section>
     <section className="card"><h2>Cronograma</h2>{schedules.length ? <Table headers={["Actividad", "Fecha", "Repetición", "Responsable", "Estado", ""]}>
       {schedules.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.date}</td><td>{item.rep === "Única" ? "Única" : `Cada ${item.rep} días`}</td><td>{item.resp || "—"}</td><td><StatusTag bad={!item.ok && item.date < TODAY}>{item.ok ? "Cumplida" : item.date < TODAY ? "Vencida" : "Pendiente"}</StatusTag></td>
@@ -1089,7 +1100,7 @@ function Schedules({ moduleId, schedules, notify }) {
   </>;
 }
 
-function Actions({ moduleId, actions, notify }) {
+function Actions({ moduleId, actions, notify, personnel }) {
   const [form, setForm] = useState({ desc: "", resp: "", due: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10) });
   const [editing, setEditing] = useState(null);
   const add = async (event) => {
@@ -1107,6 +1118,7 @@ function Actions({ moduleId, actions, notify }) {
     cause: item.cause || "",
     actionPlan: item.actionPlan || "",
     evidence: item.evidence || "",
+    evidences: item.evidences || [],
     verification: item.verification || "",
     closedBy: item.closedBy || "",
   });
@@ -1121,13 +1133,13 @@ function Actions({ moduleId, actions, notify }) {
   return <>
     <section className="card"><h2>Crear acción correctiva</h2><form className="form-grid" onSubmit={add}>
       <label className="wide-field">Descripción<input required value={form.desc} onChange={(e) => setForm({ ...form, desc: e.target.value })} /></label>
-      <label>Responsable<input value={form.resp} onChange={(e) => setForm({ ...form, resp: e.target.value })} /></label>
+      <label>Responsable<input list="personnel-actions-new" value={form.resp} onChange={(e) => setForm({ ...form, resp: e.target.value })} /></label><PersonnelOptions id="personnel-actions-new" items={personnel} />
       <label>Fecha límite<input type="date" required value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} /></label><button className="primary">Crear acción</button>
     </form></section>
     {editing && <section className="card corrective-management">
       <div className="section-heading"><div><h2>Gestionar acción correctiva</h2><p>{editing.desc}</p></div></div>
       <form className="form-grid" onSubmit={saveManagement}>
-        <label>Responsable<input required value={editing.resp} onChange={(e) => setEditing({ ...editing, resp: e.target.value })} /></label>
+        <label>Responsable<input required list="personnel-actions-edit" value={editing.resp} onChange={(e) => setEditing({ ...editing, resp: e.target.value })} /></label><PersonnelOptions id="personnel-actions-edit" items={personnel} />
         <label>Fecha límite<input required type="date" value={editing.due} onChange={(e) => setEditing({ ...editing, due: e.target.value })} /></label>
         <label>Estado<select value={editing.e} onChange={(e) => setEditing({ ...editing, e: e.target.value })}>
           <option>Abierta</option><option>En proceso</option><option>Pendiente de verificación</option><option>Cerrada</option>
@@ -1135,9 +1147,10 @@ function Actions({ moduleId, actions, notify }) {
         <label className="wide-field">Corrección inmediata<textarea required={editing.e === "Cerrada"} value={editing.correction} onChange={(e) => setEditing({ ...editing, correction: e.target.value })} placeholder="¿Qué se hizo para controlar el problema en el momento?" /></label>
         <label className="wide-field">Causa identificada<textarea required={editing.e === "Cerrada"} value={editing.cause} onChange={(e) => setEditing({ ...editing, cause: e.target.value })} placeholder="¿Por qué ocurrió el incumplimiento?" /></label>
         <label className="wide-field">Plan de acción correctiva<textarea required={editing.e === "Cerrada"} value={editing.actionPlan} onChange={(e) => setEditing({ ...editing, actionPlan: e.target.value })} placeholder="¿Qué evitará que vuelva a suceder?" /></label>
-        <label className="wide-field">Evidencia<textarea required={editing.e === "Cerrada"} value={editing.evidence} onChange={(e) => setEditing({ ...editing, evidence: e.target.value })} placeholder="Documento, fotografía, registro, orden de trabajo o descripción de la evidencia" /></label>
+        <label className="wide-field">Nota de evidencia (opcional)<textarea value={editing.evidence} onChange={(e) => setEditing({ ...editing, evidence: e.target.value })} placeholder="Referencia o nota adicional" /></label>
+        <ActionEvidences moduleId={moduleId} action={editing} notify={notify} onChange={(evidences) => setEditing({ ...editing, evidences })} />
         <label className="wide-field">Verificación de eficacia<textarea required={editing.e === "Cerrada"} value={editing.verification} onChange={(e) => setEditing({ ...editing, verification: e.target.value })} placeholder="Resultado del seguimiento que demuestra que la acción funcionó" /></label>
-        <label>Responsable del cierre<input required={editing.e === "Cerrada"} value={editing.closedBy} onChange={(e) => setEditing({ ...editing, closedBy: e.target.value })} /></label>
+        <label>Responsable del cierre<input required={editing.e === "Cerrada"} list="personnel-actions-edit" value={editing.closedBy} onChange={(e) => setEditing({ ...editing, closedBy: e.target.value })} /></label>
         <div className="action-row"><button className="primary">Guardar seguimiento</button><button type="button" onClick={() => setEditing(null)}>Cancelar</button></div>
       </form>
       {editing.e === "Cerrada" && <p className="hint">La acción solo se cerrará si todos los campos y la verificación de eficacia están completos.</p>}
@@ -1149,6 +1162,33 @@ function Actions({ moduleId, actions, notify }) {
       </td></tr>)}
     </Table> : <Empty />}</section>
   </>;
+}
+
+function PersonnelOptions({ id, items }) {
+  return <datalist id={id}>{items.map((item) => <option key={item.id} value={item.value}>{item.config?.cargo || ""}</option>)}</datalist>;
+}
+
+function ActionEvidences({ moduleId, action, notify, onChange }) {
+  const [draft, setDraft] = useState({ type: "Documento", description: "", file: null });
+  const [feedback, setFeedback] = useState("");
+  const upload = async () => {
+    setFeedback("");
+    if (!draft.file) return setFeedback("Selecciona un archivo o fotografía.");
+    if (!draft.description.trim()) return setFeedback("Escribe una descripción para la evidencia.");
+    if (draft.file.size > 1_500_000) return setFeedback("El archivo debe pesar máximo 1,5 MB.");
+    try {
+      const data = await fileToDataUrl(draft.file);
+      const created = await api(`/modules/${moduleId}/actions/${action.id}/evidences`, { method: "POST", body: JSON.stringify({ type: draft.type, description: draft.description, fileName: draft.file.name, mimeType: draft.file.type || "application/octet-stream", data }) });
+      onChange([...(action.evidences || []), created]);
+      setDraft({ type: "Documento", description: "", file: null });
+      await notify(() => Promise.resolve(), "Evidencia adjuntada.");
+    } catch (error) { setFeedback(`No fue posible cargar la evidencia: ${error.message}`); }
+  };
+  const download = async (item) => { setFeedback(""); try { const result = await api(`/modules/${moduleId}/actions/${action.id}/evidences/${item.id}`); const link = document.createElement("a"); link.href = result.data; link.download = result.fileName; link.click(); } catch (error) { setFeedback(`No fue posible descargar la evidencia: ${error.message}`); } };
+  const remove = async (item) => { if (!window.confirm(`¿Eliminar la evidencia ${item.fileName}?`)) return; setFeedback(""); try { await api(`/modules/${moduleId}/actions/${action.id}/evidences/${item.id}`, { method: "DELETE" }); onChange((action.evidences || []).filter((row) => row.id !== item.id)); await notify(() => Promise.resolve(), "Evidencia eliminada."); } catch (error) { setFeedback(`No fue posible eliminar la evidencia: ${error.message}`); } };
+  return <div className="wide-field evidence-panel"><h3>Archivos y fotografías</h3>{(action.evidences || []).map((item) => <div className="evidence-row" key={item.id}><div><strong>{item.type} · {item.fileName}</strong><small>{item.description}</small></div><button type="button" onClick={() => download(item)}>Ver / descargar</button><button type="button" className="danger-button" onClick={() => remove(item)}>Eliminar</button></div>)}
+    <div className="evidence-upload"><label>Tipo<select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}>{["Documento", "Fotografía", "Registro", "Orden de trabajo", "Otro"].map((type) => <option key={type}>{type}</option>)}</select></label><label>Descripción<input value={draft.description} maxLength="500" onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></label><label>Archivo o fotografía<input type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt" onChange={(e) => setDraft({ ...draft, file: e.target.files[0] || null })} /></label><button type="button" onClick={upload}>Adjuntar evidencia</button></div>{feedback && <p className="message error" role="alert">{feedback}</p>}
+  </div>;
 }
 
 function Alerts({ alerts }) {
