@@ -17,6 +17,7 @@ const FIELD_TYPES = {
   num: "Número",
   txt: "Texto",
   date: "Fecha",
+  time: "Hora",
   sel: "Lista de opciones",
   chk: "Sí / No",
   cumple: "Cumple / No cumple",
@@ -1076,7 +1077,7 @@ function FieldInput({ field, masters, value, onChange }) {
   if (field.t === "sel") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option>{String(field.u || "").split(",").map((item) => item.trim()).filter(Boolean).map((item) => <option key={item}>{item}</option>)}</select></label>;
   if (field.t === "equipo") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option>{(masters.equipos || []).map((item) => <option key={item.id} value={item.value}>{item.value}{item.config?.type ? ` · ${item.config.type} (${item.config.min} a ${item.config.max} °C)` : ""}</option>)}</select></label>;
   if (masterCategory) return <label>{label}<input list={`master-${field.t}`} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Elegir o escribir" /><datalist id={`master-${field.t}`}>{(masters[masterCategory] || []).map((item) => <option key={item.id} value={item.value} />)}</datalist></label>;
-  return <label>{label}<input type={field.t === "num" ? "number" : field.t === "date" ? "date" : "text"} step={field.t === "num" ? "any" : undefined} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
+  return <label>{label}<input type={field.t === "num" ? "number" : field.t === "date" ? "date" : field.t === "time" ? "time" : "text"} step={field.t === "num" ? "any" : undefined} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
 }
 
 function Schedules({ moduleId, schedules, notify, personnel }) {
