@@ -6,7 +6,7 @@ const MASTER_NAMES = {
   areas: "Áreas",
   puntos: "Puntos de muestreo",
   proveedores: "Proveedores",
-  clientes: "Clientes",
+  clientes: "Clientes", 
   equipos: "Equipos / cámaras",
   personal: "Personal",
   superficies: "Superficies",
@@ -26,7 +26,6 @@ const FIELD_TYPES = {
   proveedor: "Proveedor",
   cliente: "Cliente",
   equipo: "Equipo",
-  responsable: "Responsable",
   superficie: "Superficie",
   utensilio: "Utensilio",
   tipo_plaga: "Tipo de plaga",
@@ -252,17 +251,6 @@ function RequestIndicator({ requestState }) {
   );
 }
 
-function CurrentDateTime() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const date = new Intl.DateTimeFormat("es-CO", { timeZone: "America/Bogota", dateStyle: "medium" }).format(now);
-  const time = new Intl.DateTimeFormat("es-CO", { timeZone: "America/Bogota", hour: "numeric", minute: "2-digit", second: "2-digit" }).format(now);
-  return <div className="current-date-time" aria-label={`Fecha y hora actual: ${date}, ${time}`}><strong>{date}</strong><span>{time}</span></div>;
-}
-
 export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem("lechona_access_token") || "");
   const [data, setData] = useState(null);
@@ -449,7 +437,6 @@ export default function App() {
               <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
             </label>
           )}
-            <CurrentDateTime />
             <div className="signed-in-user">
               <span>{currentUser?.name || currentUser?.username}</span>
               <small>{currentUser?.role === "super" ? "Super administrador" : currentUser?.role === "user_admin" ? "Administrador de usuarios" : "Usuario"}</small>
@@ -1082,7 +1069,7 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
 }
 
 function FieldInput({ field, masters, value, onChange }) {
-  const masterCategory = { producto: "productos", area: "areas", punto: "puntos", proveedor: "proveedores", cliente: "clientes", equipo: "equipos", responsable: "personal", superficie: "superficies", utensilio: "utensilios", tipo_plaga: "tipos_plagas" }[field.t];
+  const masterCategory = { producto: "productos", area: "areas", punto: "puntos", proveedor: "proveedores", cliente: "clientes", equipo: "equipos", superficie: "superficies", utensilio: "utensilios", tipo_plaga: "tipos_plagas" }[field.t];
   const label = `${field.n}${field.t === "num" && (field.u || field.min !== "" || field.max !== "") ? ` (${field.u}${field.min !== "" || field.max !== "" ? ` ${field.min ?? ""}–${field.max ?? ""}` : ""})` : ""}`;
   if (field.t === "chk") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option><option>Sí</option><option>No</option></select></label>;
   if (field.t === "cumple") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option><option>Cumple</option><option>No cumple</option></select></label>;
