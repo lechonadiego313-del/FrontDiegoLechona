@@ -54,6 +54,13 @@ const normalizeProgram = (payload, moduleId) => {
   };
 };
 const newField = () => ({ n: "", t: "txt", u: "", min: "", max: "" });
+const defaultFormatConfig = (moduleId) => ({ bulkMode: moduleId === "bpm" ? "personnel" : "none", defaultResult: moduleId === "lyd" ? "Cumple" : "" });
+const bulkCriteria = (format) => format?.fields.filter((field) => field.t === "cumple") || [];
+const normalFields = (format) => format?.fields.filter((field) => {
+  if (format.config?.bulkMode === "personnel") return field.t !== "cumple" && field.t !== "responsable";
+  if (format.config?.bulkMode === "surfaces") return field.t !== "superficie";
+  return true;
+}) || [];
 const dateForMonth = (month) => month === DEFAULT_MONTH ? TODAY : `${month}-01`;
 const endOfMonth = (month) => {
   const [year, monthNumber] = month.split("-").map(Number);
@@ -61,7 +68,7 @@ const endOfMonth = (month) => {
 };
 const API_BASE_URL = (
   import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV ? "" : "https://backdiegolechona-1.onrender.com")
+  (import.meta.env.DEV ? "" : "http://localhost:3000")
 ).replace(/\/+$/, "");
 const GET_CACHE_TTL_MS = 15_000;
 const getCache = new Map();
@@ -869,8 +876,8 @@ function fileToDataUrl(file) {
 
 function Formats({ moduleId, formats, notify, onSelectFormat }) {
   const [editing, setEditing] = useState(null);
-  const startNew = () => setEditing({ name: "", freq: "Diario", fields: [newField()] });
-  const edit = (format) => setEditing({ ...format, fields: format.fields.map((field) => ({ ...field })) });
+  const startNew = () => setEditing({ name: "", freq: "Diario", fields: [newField()], config: defaultFormatConfig(moduleId) });
+  const edit = (format) => setEditing({ ...format, config: { ...defaultFormatConfig(moduleId), ...(format.config || {}) }, fields: format.fields.map((field) => ({ ...field })) });
   const updateField = (index, key, value) => setEditing((current) => ({
     ...current, fields: current.fields.map((field, i) => i === index ? { ...field, [key]: value } : field),
   }));
@@ -890,7 +897,13 @@ function Formats({ moduleId, formats, notify, onSelectFormat }) {
         <div className="form-grid">
           <label>Nombre<input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></label>
           <label>Frecuencia<select value={editing.freq} onChange={(e) => setEditing({ ...editing, freq: e.target.value })}>{["Diario", "Semanal", "Quincenal", "Mensual", "Por evento"].map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label>Modo de diligenciamiento<select value={editing.config?.bulkMode || "none"} onChange={(e) => setEditing({ ...editing, config: { ...(editing.config || {}), bulkMode: e.target.value, defaultResult: e.target.value === "surfaces" ? "Cumple" : "" } })}>
+            <option value="none">Registro normal</option><option value="personnel">Varias personas</option><option value="surfaces">Todas las superficies</option>
+          </select></label>
+          {editing.config?.bulkMode === "surfaces" && <label>Resultado inicial<select value={editing.config.defaultResult || "Cumple"} onChange={(e) => setEditing({ ...editing, config: { ...editing.config, defaultResult: e.target.value } })}><option>Cumple</option><option>No cumple</option></select></label>}
         </div>
+        {editing.config?.bulkMode === "personnel" && <p className="hint">Los campos “Cumple / No cumple” serán los criterios que se repetirán para cada persona seleccionada.</p>}
+        {editing.config?.bulkMode === "surfaces" && <p className="hint">El registro incluirá automáticamente todas las superficies del maestro. No uses este modo para concentración.</p>}
         <Table headers={["Campo", "Tipo", "Unidad u opciones", "Mínimo", "Máximo", ""]}>
           {editing.fields.map((field, index) => <tr key={index}>
             <td><input value={field.n} onChange={(e) => updateField(index, "n", e.target.value)} /></td>
@@ -921,6 +934,7 @@ function Formats({ moduleId, formats, notify, onSelectFormat }) {
 function Records({ moduleId, program, masters, month, notify, preferredFormatId, refreshKey }) {
   const [formatId, setFormatId] = useState(program.formats[0]?.id || "");
   const [values, setValues] = useState({});
+  const [bulkResults, setBulkResults] = useState({});
   const [meta, setMeta] = useState({ date: dateForMonth(month), resp: "", obs: "" });
   const [history, setHistory] = useState({ items: [], total: 0, page: 1, pageSize: 10, pages: 0 });
   const [historyPage, setHistoryPage] = useState(1);
@@ -972,12 +986,20 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
   }, [moduleId, month, formatId, historyPage, refreshKey]);
   const format = program.formats.find((item) => item.id === formatId);
   const rows = format ? history.items : [];
+  const bulkMode = format?.config?.bulkMode || "none";
+  const criteria = bulkCriteria(format);
+  const bulkMasters = bulkMode === "personnel" ? (masters.personal || []) : bulkMode === "surfaces" ? (masters.superficies || []) : [];
   const showTrends = moduleId === "agua" || moduleId === "temp";
   const numericFields = format?.fields.filter((field) => field.t === "num") || [];
   const equipmentField = format?.fields.find((field) => field.t === "equipo");
   const selectedEquipment = moduleId === "temp" && equipmentField
     ? (masters.equipos || []).find((item) => item.value === values[equipmentField.n])
     : null;
+  useEffect(() => {
+    if (bulkMode !== "surfaces") return;
+    const initialResult = format?.config?.defaultResult || "Cumple";
+    setBulkResults(Object.fromEntries((masters.superficies || []).map((item) => [item.id, bulkResults[item.id] || initialResult])));
+  }, [formatId, bulkMode, masters.superficies]);
   useEffect(() => {
     if (!showTrends || !formatId) {
       setTrendRecords([]);
@@ -1004,28 +1026,37 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
       setHistoryError("La fecha debe pertenecer al mes de trabajo seleccionado.");
       return;
     }
+    let bulkValue;
+    if (bulkMode === "personnel") {
+      bulkValue = { mode: bulkMode, items: bulkMasters.filter((item) => bulkResults[item.id]).map((item) => ({ masterId: item.id, results: bulkResults[item.id] })) };
+    } else if (bulkMode === "surfaces") {
+      bulkValue = { mode: bulkMode, items: bulkMasters.map((item) => ({ masterId: item.id, result: bulkResults[item.id] || format.config?.defaultResult || "Cumple" })) };
+    }
+    const recordValues = bulkValue ? { ...values, __bulk: bulkValue } : values;
     const saved = await notify(() => api(`/modules/${moduleId}/records`, {
       method: "POST",
-      body: JSON.stringify({ fmt: format.id, ...meta, month, vals: values }),
+      body: JSON.stringify({ fmt: format.id, ...meta, month, vals: recordValues }),
     }), "Registro guardado.");
-    if (saved) { setValues({}); setMeta({ date: dateForMonth(month), resp: "", obs: "" }); }
+    if (saved) { setValues({}); setBulkResults({}); setMeta({ date: dateForMonth(month), resp: "", obs: "" }); }
   };
   if (!program.formats.length) return <section className="card"><Empty>Crea primero un formato en la pestaña Formatos.</Empty></section>;
   return (
     <>
       <section className="card">
         <h2>Nuevo registro</h2>
-        <label className="compact-label">Formato<select id="record-format" value={formatId} onChange={(e) => setFormatId(e.target.value)}>{program.formats.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label className="compact-label">Formato<select id="record-format" value={formatId} onChange={(e) => { setFormatId(e.target.value); setValues({}); setBulkResults({}); }}>{program.formats.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         {format && <form className="form-grid record-form" onSubmit={save}>
           <label>Fecha<input type="date" required min={`${month}-01`} max={endOfMonth(month)} value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} /></label>
           <label>Responsable<input list="personnel-records" value={meta.resp} onChange={(e) => setMeta({ ...meta, resp: e.target.value })} /></label><PersonnelOptions id="personnel-records" items={masters.personal || []} />
-          {format.fields.map((field) => {
+          {normalFields(format).map((field) => {
             const usesEquipmentRange = selectedEquipment?.config && field.t === "num" && field.n.toLocaleLowerCase("es").includes("temperatura");
             const effectiveField = usesEquipmentRange
               ? { ...field, min: selectedEquipment.config.min, max: selectedEquipment.config.max }
               : field;
             return <FieldInput key={field.n} field={effectiveField} masters={masters} value={values[field.n] ?? ""} onChange={(value) => setValues({ ...values, [field.n]: value })} />;
           })}
+          {bulkMode === "personnel" && <PersonnelReviewMatrix personnel={bulkMasters} criteria={criteria} results={bulkResults} onChange={setBulkResults} />}
+          {bulkMode === "surfaces" && <SurfaceReviewMatrix surfaces={bulkMasters} results={bulkResults} defaultResult={format.config?.defaultResult || "Cumple"} onChange={setBulkResults} />}
           <label className="wide-field">Observaciones<input value={meta.obs} onChange={(e) => setMeta({ ...meta, obs: e.target.value })} /></label>
           <button className="primary">Guardar registro</button>
         </form>}
@@ -1049,7 +1080,7 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
       <section className="card"><h2>Histórico {month} · {history.total}</h2>
         {historyError && <p className="message error" role="alert">{historyError}</p>}
         {historyLoading ? <p role="status">Cargando registros…</p> : rows.length ? <Table
-          headers={["Fecha", "Responsable", ...format.fields.map((field) => field.n), "Observaciones", "Estado", ""]}
+          headers={bulkMode === "none" ? ["Fecha", "Responsable", ...format.fields.map((field) => field.n), "Observaciones", "Estado", ""] : ["Fecha", "Responsable", bulkMode === "personnel" ? "Personal revisado" : "Superficies revisadas", "Observaciones", "Estado", ""]}
           serverPagination={{
             page: history.page,
             pageSize: history.pageSize,
@@ -1058,7 +1089,7 @@ function Records({ moduleId, program, masters, month, notify, preferredFormatId,
             onPageChange: setHistoryPage,
           }}>
           {rows.map((record) => <tr key={record.id} className={record.devs.length ? "bad-row" : ""}>
-            <td>{record.date}</td><td>{record.resp || "—"}</td>{format.fields.map((field) => <td key={field.n} className={record.devs.some((item) => item.startsWith(`${field.n}:`)) ? "bad-value" : ""}>{record.vals[field.n] ?? ""}</td>)}
+            <td>{record.date}</td><td>{record.resp || "—"}</td>{bulkMode === "none" ? format.fields.map((field) => <td key={field.n} className={record.devs.some((item) => item.startsWith(`${field.n}:`)) ? "bad-value" : ""}>{record.vals[field.n] ?? ""}</td>) : <td><BulkReviewDetails bulk={record.vals?.__bulk} /></td>}
             <td>{record.obs}</td><td><StatusTag bad={record.devs.length > 0}>{record.devs.length ? "Desviación" : "OK"}</StatusTag></td>
             <td><button className="danger-button" onClick={() => {
               if (window.confirm("¿Eliminar este registro?")) notify(() => api(`/modules/${moduleId}/records/${record.id}`, { method: "DELETE" }), "Registro eliminado.");
@@ -1078,6 +1109,38 @@ function FieldInput({ field, masters, value, onChange }) {
   if (field.t === "equipo") return <label>{label}<select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Seleccionar…</option>{(masters.equipos || []).map((item) => <option key={item.id} value={item.value}>{item.value}{item.config?.type ? ` · ${item.config.type} (${item.config.min} a ${item.config.max} °C)` : ""}</option>)}</select></label>;
   if (masterCategory) return <label>{label}<input list={`master-${field.t}`} value={value} onChange={(e) => onChange(e.target.value)} placeholder="Elegir o escribir" /><datalist id={`master-${field.t}`}>{(masters[masterCategory] || []).map((item) => <option key={item.id} value={item.value} />)}</datalist></label>;
   return <label>{label}<input type={field.t === "num" ? "number" : field.t === "date" ? "date" : field.t === "time" ? "time" : "text"} step={field.t === "num" ? "any" : undefined} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
+}
+
+function PersonnelReviewMatrix({ personnel, criteria, results, onChange }) {
+  const togglePerson = (person, selected) => onChange((current) => {
+    if (!selected) return Object.fromEntries(Object.entries(current).filter(([id]) => id !== person.id));
+    return { ...current, [person.id]: Object.fromEntries(criteria.map((field) => [field.n, ""])) };
+  });
+  const updateResult = (personId, criterion, result) => onChange((current) => ({
+    ...current, [personId]: { ...current[personId], [criterion]: result },
+  }));
+  return <fieldset className="bulk-review wide-field"><legend>Personal que asistió</legend>
+    {!criteria.length && <p className="message error">Este formato todavía no tiene criterios “Cumple / No cumple”. Agrégalos desde la pestaña Formatos.</p>}
+    {!personnel.length && <p className="hint">No hay personas registradas en el maestro de Personal.</p>}
+    <div className="bulk-selector">{personnel.map((person) => <label key={person.id}><input type="checkbox" checked={Boolean(results[person.id])} onChange={(event) => togglePerson(person, event.target.checked)} />{person.value}</label>)}</div>
+    {Object.keys(results).length > 0 && criteria.length > 0 && <div className="table-wrap"><table><thead><tr><th>Persona</th>{criteria.map((field) => <th key={field.n}>{field.n}</th>)}</tr></thead><tbody>
+      {personnel.filter((person) => results[person.id]).map((person) => <tr key={person.id}><td>{person.value}</td>{criteria.map((field) => <td key={field.n}><select required value={results[person.id]?.[field.n] || ""} onChange={(event) => updateResult(person.id, field.n, event.target.value)}><option value="">Seleccionar…</option><option>Cumple</option><option>No cumple</option></select></td>)}</tr>)}
+    </tbody></table></div>}
+  </fieldset>;
+}
+
+function SurfaceReviewMatrix({ surfaces, results, defaultResult, onChange }) {
+  return <fieldset className="bulk-review wide-field"><legend>Revisión de superficies</legend>
+    {!surfaces.length && <p className="hint">No hay superficies registradas en el maestro.</p>}
+    <div className="surface-review-grid">{surfaces.map((surface) => <label key={surface.id}>{surface.value}<select value={results[surface.id] || defaultResult} onChange={(event) => onChange((current) => ({ ...current, [surface.id]: event.target.value }))}><option>Cumple</option><option>No cumple</option></select></label>)}</div>
+  </fieldset>;
+}
+
+function BulkReviewDetails({ bulk }) {
+  if (!bulk?.items?.length) return "—";
+  return <div className="bulk-details">{bulk.items.map((item) => <div key={item.masterId}><strong>{item.masterName || item.masterId}</strong>{bulk.mode === "personnel"
+    ? <span>{Object.entries(item.results || {}).map(([criterion, result]) => `${criterion}: ${result}`).join(" · ")}</span>
+    : <span className={item.result === "No cumple" ? "bad-value" : ""}>{item.result}</span>}</div>)}</div>;
 }
 
 function Schedules({ moduleId, schedules, notify, personnel }) {
@@ -1212,7 +1275,7 @@ function ReportRows({ report }) {
   return report.records.length ? <Table headers={["Programa", "Formato", "Fecha", "Responsable", "Datos", "Desviaciones", "Observaciones"]}>
     {report.records.map((row, index) => <tr className={row.deviations.length ? "bad-row" : ""} key={`${row.moduleId}-${row.date}-${index}`}>
       <td>{row.moduleName}</td><td>{row.format}</td><td>{row.date}</td><td>{row.responsible}</td>
-      <td>{Object.entries(row.values).map(([key, value]) => `${key}=${value}`).join("; ")}</td><td>{row.deviations.join(" | ")}</td><td>{row.observations}</td>
+      <td>{formatRecordValues(row.values)}</td><td>{row.deviations.join(" | ")}</td><td>{row.observations}</td>
     </tr>)}
   </Table> : <Empty>No hay registros para este periodo.</Empty>;
 }
@@ -1222,10 +1285,19 @@ function exportReportCsv(report, month) {
   const header = ["Programa", "Formato", "Fecha", "Responsable", "Datos", "Desviaciones", "Observaciones"];
   const body = report.records.map((row) => [
     row.moduleName, row.format, row.date, row.responsible,
-    Object.entries(row.values).map(([key, value]) => `${key}=${value}`).join("; "),
+    formatRecordValues(row.values),
     row.deviations.join(" | "), row.observations,
   ]);
   saveFile(`informe_calidad_${month}.csv`, [header, ...body].map((row) => row.map(csvCell).join(",")).join("\r\n"), "text/csv;charset=utf-8");
+}
+
+function formatRecordValues(values) {
+  const regular = Object.entries(values || {}).filter(([key]) => key !== "__bulk").map(([key, value]) => `${key}=${value}`);
+  const bulk = values?.__bulk;
+  const repeated = (bulk?.items || []).map((item) => bulk.mode === "personnel"
+    ? `${item.masterName || item.masterId} [${Object.entries(item.results || {}).map(([criterion, result]) => `${criterion}: ${result}`).join(", ")}]`
+    : `${item.masterName || item.masterId}: ${item.result}`);
+  return [...regular, ...repeated].join("; ");
 }
 
 function Traceability() {
@@ -1246,7 +1318,7 @@ function Traceability() {
     </form><p className="hint">Busca el lote en todos los programas y muestra los registros cronológicamente para apoyar un recall.</p>{error && <p className="error-text">{error}</p>}</section>
     {results && <section className="card"><h2>{results.length} registro(s) con el lote “{lot}”</h2>
       {results.length ? <Table headers={["Fecha", "Programa", "Formato", "Datos", "Estado"]}>
-        {results.map((record) => <tr className={record.devs.length ? "bad-row" : ""} key={record.id}><td>{record.date}</td><td>{record.moduleName}</td><td>{record.formatName}</td><td>{Object.entries(record.vals).map(([key, value]) => `${key}: ${value}`).join(" · ")}</td><td>{record.devs.length ? "Desviación" : "OK"}</td></tr>)}
+        {results.map((record) => <tr className={record.devs.length ? "bad-row" : ""} key={record.id}><td>{record.date}</td><td>{record.moduleName}</td><td>{record.formatName}</td><td>{formatRecordValues(record.vals)}</td><td>{record.devs.length ? "Desviación" : "OK"}</td></tr>)}
       </Table> : <Empty>No se encontraron coincidencias.</Empty>}
     </section>}
   </>;
